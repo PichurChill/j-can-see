@@ -1,0 +1,46 @@
+{
+  "name": "j-can-see",
+  "version": "0.1.0",
+  "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible proxy. For AI coding clients whose primary model has no multimodal input.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "j-can-see": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "jimp": "^1.6.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "vision",
+    "image",
+    "ocr",
+    "claude-code",
+    "codex",
+    "grok"
+  ]
+}
