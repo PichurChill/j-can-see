@@ -2,6 +2,10 @@
 
 English | [中文文档](./README.zh-CN.md)
 
+[![npm version](https://img.shields.io/npm/v/j-can-see)](https://www.npmjs.com/package/j-can-see)
+[![npm downloads](https://img.shields.io/npm/dm/j-can-see)](https://www.npmjs.com/package/j-can-see)
+[![license: MIT](https://img.shields.io/npm/l/j-can-see)](https://www.npmjs.com/package/j-can-see)
+
 An MCP server that sends images (local file / URL / clipboard / latest screenshot) to a vision model and returns a text description.
 
 **Who is it for**: AI coding clients like Claude Code / Codex whose primary model has **no multimodal input** (can't see images). Use the `see_image` tool to outsource vision.

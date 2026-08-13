@@ -2,6 +2,10 @@
 
 [English](./README.md) | 中文
 
+[![npm version](https://img.shields.io/npm/v/j-can-see)](https://www.npmjs.com/package/j-can-see)
+[![npm downloads](https://img.shields.io/npm/dm/j-can-see)](https://www.npmjs.com/package/j-can-see)
+[![license: MIT](https://img.shields.io/npm/l/j-can-see)](https://www.npmjs.com/package/j-can-see)
+
 一个 MCP server：把图片（本地文件 / URL / 剪贴板 / 最近截图）交给视觉模型，返回文字描述。
 
 **给谁用**：Claude Code / Codex 等 AI 编程客户端，当其主模型**没有多模态输入能力**（看不了图）时，用 `see_image` 工具外包识图。
