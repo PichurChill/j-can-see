@@ -1,103 +1,131 @@
 # j-can-see
 
-一个 MCP server：把图片（本地文件 / URL / 剪贴板 / 最近截图）交给视觉模型，返回文字描述。
+English | [中文文档](./README.zh-CN.md)
 
-**给谁用**：Claude Code / Codex 等 AI 编程客户端，当其主模型**没有多模态输入能力**（看不了图）时，用 `see_image` 工具外包识图。
+An MCP server that sends images (local file / URL / clipboard / latest screenshot) to a vision model and returns a text description.
 
-## 它解决什么问题
+**Who is it for**: AI coding clients like Claude Code / Codex whose primary model has **no multimodal input** (can't see images). Use the `see_image` tool to outsource vision.
 
-当主模型不支持图片输入时，直接 `Read` 一张图或把截图粘进对话，会在 API 请求层直接 400，整个 turn 崩溃——模型拿不到"失败"事件，无法自救。
+## The problem it solves
 
-`j-can-see` 让识图变成一个**普通文本工具调用**：模型传一个路径/URL，拿到一段文字描述，纯文本模型也能消费。
+When the primary model doesn't support image input, `Read`-ing an image or pasting a screenshot into the conversation causes a direct 400 at the API layer and the whole turn crashes — the model never sees a "failure" event and can't recover on its own.
 
-## 快速开始
+`j-can-see` turns vision into an **ordinary text tool call**: the model passes a path/URL and gets back a text description — usable by any text-only model.
 
-### 一行命令（推荐）
+## Quick start
+
+### One-liner (recommended)
 
 ```bash
 claude mcp add j-can-see -s user \
-    -e J_SEE_TOKEN='你的key' \
-    -e J_SEE_BASE_URL='https://你的代理地址' \
+    -e J_SEE_TOKEN='your-key' \
+    -e J_SEE_BASE_URL='https://your-proxy.example' \
     -e J_SEE_MODEL='grok-4.5' \
     -- npx -y j-can-see
 ```
 
-> `-s user` 确保配置写在 `~/.claude.json`（不在任何 git 仓库里），key 不会泄露。
+> `-s user` writes the config to `~/.claude.json` (outside any git repo), so the key never leaks.
 
-### 手动配置
+### Manual configuration
 
-在 `~/.claude.json` 的 `mcpServers` 下加：
+Add this to the `mcpServers` section of `~/.claude.json`:
 
 ```jsonc
 "j-can-see": {
   "command": "npx",
   "args": ["-y", "j-can-see"],
   "env": {
-    "J_SEE_TOKEN": "你的视觉模型 key",
-    "J_SEE_BASE_URL": "https://你的代理地址",
+    "J_SEE_TOKEN": "your vision model key",
+    "J_SEE_BASE_URL": "https://your-proxy.example",
     "J_SEE_MODEL": "grok-4.5"
   }
 }
 ```
 
-## 环境变量
+## Environment variables
 
-| 变量 | 必填 | 默认 | 说明 |
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| `J_SEE_TOKEN` | 是 | — | 视觉模型的 API key（**不内嵌，必须显式配置**） |
-| `J_SEE_BASE_URL` | 是 | — | OpenAI 兼容端点根地址（末尾斜杠自动去除） |
-| `J_SEE_MODEL` | 是 | — | 视觉模型名（**必须显式配置**） |
-| `J_SEE_REASONING` | 否 | `none` | 推理强度：`none` / `low` / `medium` / `high` |
-| `J_SEE_MAX_EDGE` | 否 | `1568` | 图片压缩长边像素上限 |
-| `J_SEE_MAX_BYTES` | 否 | `52428800` | 源文件体积上限（字节），超出拒绝 |
-| `J_SEE_TIMEOUT_MS` | 否 | `90000` | 视觉调用超时（毫秒） |
+| `J_SEE_TOKEN` | Yes | — | Vision model API key (**not hardcoded — must be set explicitly**) |
+| `J_SEE_BASE_URL` | Yes | — | Vision endpoint base URL (must match `J_SEE_API_SPEC`; trailing slashes are stripped) |
+| `J_SEE_MODEL` | Yes | — | Vision model name (**must be set explicitly**) |
+| `J_SEE_API_SPEC` | No | `responses` | Upstream API spec (see below): `responses` / `openai` / `anthropic` |
+| `J_SEE_REASONING` | No | `none` | Reasoning effort (**only honored by the `openai` spec**): `none` / `low` / `medium` / `high` |
+| `J_SEE_MAX_EDGE` | No | `1568` | Max long-edge pixels for image compression |
+| `J_SEE_MAX_BYTES` | No | `52428800` | Max source file size in bytes; larger is rejected |
+| `J_SEE_TIMEOUT_MS` | No | `90000` | Vision call timeout in milliseconds |
 
-缺必填项 → 启动即崩并打印原因（fail fast）。
+Missing required variables → crash on startup with a clear reason (fail fast).
 
-> `J_SEE_MODEL` 无默认值：填你的代理实际支持的视觉模型名。实测 `grok-4.5` 在同等识图质量下 token 消耗较低，可作为参考选择。
+> `J_SEE_MODEL` has no default: use the vision model your endpoint actually supports. In testing, `grok-4.5` used fewer tokens than other candidates at equal description quality.
 
-## 工具：`see_image`
+### API specs (`J_SEE_API_SPEC`)
+
+Three upstream specs, default `responses`:
+
+| Value | Endpoint | Use case |
+|---|---|---|
+| `responses` (default) | `/v1/responses` | OpenAI Responses — native API for GPT-5 / Codex; aligns with the cc switch / Codex ecosystem |
+| `openai` | `/v1/chat/completions` | OpenAI Chat Completions — compatible with all OpenAI-compatible proxies (OpenRouter / LiteLLM / CLIProxyAPI / one-api, etc.) |
+| `anthropic` | `/v1/messages` | Anthropic Messages — can call the Claude native API directly, no proxy needed |
+
+**Direct Claude (`anthropic`)**: call Anthropic directly without any OpenAI-compatible proxy:
+
+```bash
+claude mcp add j-can-see -s user \
+    -e J_SEE_API_SPEC='anthropic' \
+    -e J_SEE_TOKEN='sk-ant-...' \
+    -e J_SEE_BASE_URL='https://api.anthropic.com' \
+    -e J_SEE_MODEL='claude-sonnet-4-5-20250929' \
+    -- npx -y j-can-see
+```
+
+> - `J_SEE_REASONING` is ignored under `responses` / `anthropic` (only `openai` honors it).
+> - In practice, none of the three specs can fully turn off reasoning — the translation layer doesn't pass through effort, so a single vision call still burns a few hundred reasoning tokens (`responses` ≈ 500, `openai` ≈ 900, `anthropic` keeps thinking off by default). Quality is unaffected; this is acceptable.
+> - Default `responses`: if your proxy doesn't support `/v1/responses` (returns 404), the error message will suggest setting `J_SEE_API_SPEC=openai` (**no silent fallback** — errors are reported as-is, and you decide explicitly to switch specs).
+
+## Tool: `see_image`
 
 ```typescript
 see_image({
-  source: string,   // 见下表
-  prompt?: string   // 省略则"详细描述图片内容，含文字/UI/颜色/布局"
-}) → string         // 模型返回的文字描述
+  source: string,   // see table below
+  prompt?: string   // omitted → "describe the image in detail, including text/UI/colors/layout"
+}) → string         // text description returned by the model
 ```
 
-## CLI 命令
+## CLI
 
 ```bash
-npx j-can-see --hook   # 输出 PreToolUse hook 脚本内容，写入本地磁盘后配合 Claude Code settings 使用
+npx j-can-see --hook   # print the PreToolUse hook script; save it locally and wire it up in Claude Code settings
 ```
 
-### `source` 来源
+### `source` values
 
-| 值 | 说明 |
+| Value | Description |
 |---|---|
-| 本地路径 | 支持 `~` 展开，如 `~/Desktop/a.png`、`./logo.jpg` |
-| `http(s)://` URL | 下载后识别（校验 content-type 为 `image/*`） |
-| `"clipboard"` | 系统剪贴板中的图片（仅 mac / win） |
-| `"latest"` | 截图目录中最新一张图 |
+| Local path | Supports `~` expansion, e.g. `~/Desktop/a.png`, `./logo.jpg` |
+| `http(s)://` URL | Downloaded then described (content-type must be `image/*`) |
+| `"clipboard"` | Image in the system clipboard (mac / win only) |
+| `"latest"` | Most recent image in the screenshot directory |
 
-## Claude Code 配置（MCP + Hook）
+## Claude Code setup (MCP + Hook)
 
 ### 1. MCP server
 
-见上方"快速开始"，写入 `~/.claude.json` 或项目 `.mcp.json`。
+See "Quick start" above; write to `~/.claude.json` or a project-level `.mcp.json`.
 
-### 2. PreToolUse Hook（推荐）
+### 2. PreToolUse Hook (recommended)
 
-否则模型看到图片路径的本能反应是 `Read`，一读就触发那个 400。Hook 在请求前拦截并引导到 `see_image`：
+Without it, the model's instinct when it sees an image path is to `Read` it — which triggers that 400. The hook intercepts the request first and redirects to `see_image`:
 
-**第一步：导出 hook 脚本**
+**Step 1: export the hook script**
 
 ```bash
 npx j-can-see --hook > ~/.claude/hooks/block-image-read.mjs
 chmod +x ~/.claude/hooks/block-image-read.mjs
 ```
 
-**第二步：配置 Claude Code**
+**Step 2: configure Claude Code**
 
 ```jsonc
 // ~/.claude/settings.json
@@ -118,68 +146,69 @@ chmod +x ~/.claude/hooks/block-image-read.mjs
 }
 ```
 
-> hook 判断逻辑很保守：只在"调用 Read 且文件是图片后缀"时才拦截。多模态模型不会主动 Read 图片（直接看 image block），所以 hook 不会误拦。
+> The hook is deliberately conservative: it only intercepts `Read` calls on image file extensions. Multimodal models don't `Read` images (they consume image blocks directly), so the hook never misfires for them.
 
-## Codex 配置
+## Codex setup
 
-Codex 无 PreToolUse 拦截机制，靠 `AGENTS.md` 约定：
+Codex has no PreToolUse interception, so rely on an `AGENTS.md` convention:
 
 ```markdown
-## 图片识别
-本会话的主模型无多模态能力，禁止用 view_image / 直接读图片。
-需要识图时，调用 MCP 工具 see_image({ source })。
+## Image recognition
+This session's primary model has no multimodal capability; do not use view_image or read images directly.
+To describe an image, call the MCP tool see_image({ source }).
 ```
 
-可靠性弱于 hook，但 Codex 侧目前只能如此。
+Less reliable than the hook, but it's all Codex supports for now.
 
-## 默认参数的来由（实测，非猜测）
+## Why these defaults (measured, not guessed)
 
-| 默认值 | 实测依据 |
+| Default | Evidence |
 |---|---|
-| `J_SEE_REASONING=none` | **未真正关闭推理**（转换层未透传到 0，单次识图仍有约 900 reasoning tokens），但比默认快约一倍、省约 28% token、识别质量无损 |
-| 强制 `User-Agent` 头 | Cloudflare bot 防护会对默认 UA 返回 403（实测 urllib 被 403） |
-| 超时 90s | 短于 Cloudflare Tunnel 的 100s 上限，让客户端先于 524 给出清晰错误 |
+| `J_SEE_API_SPEC=responses` | The Responses endpoint (CLIProxyAPI + grok-4.6) works for vision in testing; reasoning tokens (≈500) are actually lower than Chat Completions (≈900), and it aligns with Codex / cc switch |
+| `J_SEE_REASONING=none` | **Doesn't truly disable reasoning** (the translation layer never forwards 0; ~900 reasoning tokens per vision call remain), but it's about twice as fast, saves ~28% tokens, and quality is unaffected |
+| Forced `User-Agent` header | Cloudflare bot protection returns 403 for default UAs (tested: urllib got 403) |
+| 90s timeout | Shorter than Cloudflare Tunnel's 100s cap, so clients get a clear error before a 524 |
 
-## 分享给他人
+## Sharing with others
 
-给朋友的命令和你的完全一样：只是 `J_SEE_TOKEN` 换成给朋友的 key。
+The command for a friend is identical to yours — just replace `J_SEE_TOKEN` with a key issued for them.
 
 ```bash
 claude mcp add j-can-see -s user \
-    -e J_SEE_TOKEN='给朋友的独立key' \
-    -e J_SEE_BASE_URL='https://你的代理地址' \
+    -e J_SEE_TOKEN='friend-specific-key' \
+    -e J_SEE_BASE_URL='https://your-proxy.example' \
     -e J_SEE_MODEL='grok-4.5' \
     -- npx -y j-can-see
 ```
 
-### Key 安全：每人独立，不共用
+### Key safety: one per person, never shared
 
-CLIProxyAPI 的 `api-keys` 是扁平数组——所有 key 权限等价（没有 per-key 模型白名单或配额）。**绝对不要把你自己主力 key 发给朋友。**
+CLIProxyAPI's `api-keys` is a flat array — all keys have equal permissions (no per-key model whitelist or quota). **Never hand your main key to a friend.**
 
-在服务器上每人单独建 key：
+Create a separate key per person on the server:
 ```yaml
 # /root/CLIProxyAPI/config.yaml
 api-keys:
-  - sk-你的主力key     # ← 永远不给任何人
-  - sk-朋友A专用       # ← 朋友A。谁出问题删谁的，不影响其他人
-  - sk-朋友B专用       # ← 朋友B
+  - sk-your-main-key      # ← never give this to anyone
+  - sk-friend-A           # ← friend A. If a key misbehaves, delete just that one
+  - sk-friend-B           # ← friend B
 ```
 
-### 要不要加 gateway（限额/模型白名单）
+### Do you need a gateway (quota / model whitelist)?
 
-CLIProxyAPI 目前没有 per-key 的配额或模型限制——朋友拿到 key 后能调你后台所有模型（包括生成视频等贵模型）。如果你信得过朋友，不需要额外网关；如果需要限额/白名单，需另加一层薄 gateway。
+CLIProxyAPI currently has no per-key quota or model restrictions — a friend with a key can call every model on your backend (including expensive ones like video generation). If you trust your friends, no extra gateway is needed; if you need quotas/whitelists, add a thin gateway in front.
 
-### 如果服务器端是 CLIProxyAPI
+### If the server side is CLIProxyAPI
 
-**服务器侧无需任何改动**，直接把它的地址填进 `J_SEE_BASE_URL` 即可，因为它已具备 HTTPS（Cloudflare Tunnel）+ 鉴权（`api-keys`）+ OpenAI 图像兼容。
+**No server-side changes needed** — just point `J_SEE_BASE_URL` at it, since it already has HTTPS (Cloudflare Tunnel) + auth (`api-keys`) + OpenAI image compatibility.
 
-## 限制
+## Limitations
 
-- **Linux 剪贴板不支持**：`source: "clipboard"` 在 Linux 会明确报错，请改用文件路径（这是能力边界声明，非降级）
-- 透明 PNG 会转 JPEG（透明通道丢失为黑底），对含文字截图无影响
-- 不重试、不降级：视觉调用失败原样上报，由调用方决策
+- **No Linux clipboard**: `source: "clipboard"` errors out clearly on Linux; use a file path instead (a declared boundary, not a silent fallback)
+- Transparent PNGs are converted to JPEG (alpha becomes black); irrelevant for text screenshots
+- No retries, no fallback: vision failures are reported as-is; the caller decides
 
-## 开发
+## Development
 
 ```bash
 npm install
@@ -187,12 +216,12 @@ npm test        # vitest
 npm run build   # tsc → dist/
 ```
 
-### 发版
+### Publishing
 
 ```bash
-# 1. 改 package.json 的 version（如 0.1.0 → 0.1.1）
-# 2. 构建
+# 1. Bump version in package.json (e.g. 0.1.0 → 0.1.1)
+# 2. Build
 npm run build
-# 3. 发到 npm（务必指定官方 registry，即便全局配了淘宝镜像）
+# 3. Publish to npm (always use the official registry, even if a mirror is configured globally)
 npm publish --registry=https://registry.npmjs.org/
 ```

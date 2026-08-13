@@ -1,7 +1,7 @@
 {
   "name": "j-can-see",
-  "version": "0.2.0",
-  "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible proxy. For AI coding clients whose primary model has no multimodal input.",
+  "version": "0.4.0",
+  "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible or Anthropic API. For AI coding clients whose primary model has no multimodal input.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,8 @@
   "files": [
     "dist",
     "hooks",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "engines": {
     "node": ">=20"

@@ -26,6 +26,16 @@ const envSchema = z.object({
     .string()
     .min(1, "J_SEE_MODEL 未配置：需要视觉模型名"),
 
+  // 上游 API 规范：
+  //  - responses = OpenAI Responses（/v1/responses），GPT-5 / Codex 原生接口，
+  //    与 cc switch / Codex 生态对齐；默认选项
+  //  - openai = OpenAI Chat Completions（/v1/chat/completions），兼容所有
+  //    OpenAI 兼容代理（OpenRouter / LiteLLM / CLIProxyAPI / one-api 等）
+  //  - anthropic = Anthropic Messages（/v1/messages），可直连 Claude 原生 API
+  J_SEE_API_SPEC: z
+    .enum(["responses", "openai", "anthropic"])
+    .default("responses"),
+
   // 推理强度。实测 CLIProxyAPI 转换层不会把 none 真正关到 0，
   // 但 none 仍能比默认快约一倍、省约 28% token，且识别质量无损
   J_SEE_REASONING: z

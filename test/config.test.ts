@@ -11,6 +11,7 @@ describe("loadConfig", () => {
   it("应用默认值", () => {
     const c = loadConfig(BASE);
     expect(c.J_SEE_MODEL).toBe("grok-4.5");
+    expect(c.J_SEE_API_SPEC).toBe("responses");
     expect(c.J_SEE_REASONING).toBe("none");
     expect(c.J_SEE_MAX_EDGE).toBe(1568);
     expect(c.J_SEE_MAX_BYTES).toBe(50 * 1024 * 1024);
@@ -65,6 +66,22 @@ describe("loadConfig", () => {
   it("REASONING 非法值抛错", () => {
     expect(() =>
       loadConfig({ ...BASE, J_SEE_REASONING: "turbo" }),
+    ).toThrow();
+  });
+
+  it("API_SPEC 默认 responses，可显式设为 openai / anthropic", () => {
+    expect(loadConfig(BASE).J_SEE_API_SPEC).toBe("responses");
+    expect(
+      loadConfig({ ...BASE, J_SEE_API_SPEC: "openai" }).J_SEE_API_SPEC,
+    ).toBe("openai");
+    expect(
+      loadConfig({ ...BASE, J_SEE_API_SPEC: "anthropic" }).J_SEE_API_SPEC,
+    ).toBe("anthropic");
+  });
+
+  it("API_SPEC 非法值抛错", () => {
+    expect(() =>
+      loadConfig({ ...BASE, J_SEE_API_SPEC: "gemini" }),
     ).toThrow();
   });
 });

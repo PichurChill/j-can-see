@@ -7,3 +7,6 @@ dist/
 .npmrc
 .npmrc.*
 coverage/
+
+# ZCode IDE 本地文件（计划/会话），不上传
+.zcode/

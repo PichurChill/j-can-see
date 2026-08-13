@@ -41,7 +41,7 @@ function main(): void {
   const config = loadConfig();
 
   const server = new Server(
-    { name: "j-can-see", version: "0.1.0" },
+    { name: "j-can-see", version: "0.4.0" },
     { capabilities: { tools: {} } },
   );
 
