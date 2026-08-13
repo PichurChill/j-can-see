@@ -1,8 +1,16 @@
 {
   "name": "j-can-see",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible or Anthropic API. For AI coding clients whose primary model has no multimodal input.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PichurChill/j-can-see.git"
+  },
+  "homepage": "https://github.com/PichurChill/j-can-see#readme",
+  "bugs": {
+    "url": "https://github.com/PichurChill/j-can-see/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "bin": {
