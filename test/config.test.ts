@@ -4,6 +4,7 @@ import { loadConfig } from "../src/config.js";
 const BASE = {
   J_SEE_TOKEN: "tok_x",
   J_SEE_BASE_URL: "https://example.com",
+  J_SEE_MODEL: "grok-4.5",
 } as const;
 
 describe("loadConfig", () => {
@@ -35,6 +36,18 @@ describe("loadConfig", () => {
 
   it("缺少 BASE_URL 抛错", () => {
     expect(() => loadConfig({ J_SEE_TOKEN: "x" })).toThrow(/J_SEE_BASE_URL/);
+  });
+
+  it("缺少 MODEL 抛错", () => {
+    expect(() =>
+      loadConfig({ J_SEE_TOKEN: "x", J_SEE_BASE_URL: "https://x.com" }),
+    ).toThrow(/J_SEE_MODEL/);
+  });
+
+  it("空字符串 MODEL 抛错", () => {
+    expect(() => loadConfig({ ...BASE, J_SEE_MODEL: "" })).toThrow(
+      /J_SEE_MODEL/,
+    );
   });
 
   it("非法 URL 抛错", () => {

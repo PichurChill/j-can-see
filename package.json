@@ -1,6 +1,6 @@
 {
   "name": "j-can-see",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible proxy. For AI coding clients whose primary model has no multimodal input.",
   "license": "MIT",
   "type": "module",

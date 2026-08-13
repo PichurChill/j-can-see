@@ -18,6 +18,7 @@
 claude mcp add j-can-see -s user \
     -e J_SEE_TOKEN='你的key' \
     -e J_SEE_BASE_URL='https://你的代理地址' \
+    -e J_SEE_MODEL='grok-4.5' \
     -- npx -y j-can-see
 ```
 
@@ -33,7 +34,8 @@ claude mcp add j-can-see -s user \
   "args": ["-y", "j-can-see"],
   "env": {
     "J_SEE_TOKEN": "你的视觉模型 key",
-    "J_SEE_BASE_URL": "https://你的代理地址"
+    "J_SEE_BASE_URL": "https://你的代理地址",
+    "J_SEE_MODEL": "grok-4.5"
   }
 }
 ```
@@ -44,13 +46,15 @@ claude mcp add j-can-see -s user \
 |---|---|---|---|
 | `J_SEE_TOKEN` | 是 | — | 视觉模型的 API key（**不内嵌，必须显式配置**） |
 | `J_SEE_BASE_URL` | 是 | — | OpenAI 兼容端点根地址（末尾斜杠自动去除） |
-| `J_SEE_MODEL` | 否 | `grok-4.5` | 视觉模型名 |
+| `J_SEE_MODEL` | 是 | — | 视觉模型名（**必须显式配置**） |
 | `J_SEE_REASONING` | 否 | `none` | 推理强度：`none` / `low` / `medium` / `high` |
 | `J_SEE_MAX_EDGE` | 否 | `1568` | 图片压缩长边像素上限 |
 | `J_SEE_MAX_BYTES` | 否 | `52428800` | 源文件体积上限（字节），超出拒绝 |
 | `J_SEE_TIMEOUT_MS` | 否 | `90000` | 视觉调用超时（毫秒） |
 
 缺必填项 → 启动即崩并打印原因（fail fast）。
+
+> `J_SEE_MODEL` 无默认值：填你的代理实际支持的视觉模型名。实测 `grok-4.5` 在同等识图质量下 token 消耗较低，可作为参考选择。
 
 ## 工具：`see_image`
 
@@ -132,7 +136,6 @@ Codex 无 PreToolUse 拦截机制，靠 `AGENTS.md` 约定：
 
 | 默认值 | 实测依据 |
 |---|---|
-| `J_SEE_MODEL=grok-4.5` | 同等识图质量下 token 消耗低于其他候选 |
 | `J_SEE_REASONING=none` | **未真正关闭推理**（转换层未透传到 0，单次识图仍有约 900 reasoning tokens），但比默认快约一倍、省约 28% token、识别质量无损 |
 | 强制 `User-Agent` 头 | Cloudflare bot 防护会对默认 UA 返回 403（实测 urllib 被 403） |
 | 超时 90s | 短于 Cloudflare Tunnel 的 100s 上限，让客户端先于 524 给出清晰错误 |
@@ -145,6 +148,7 @@ Codex 无 PreToolUse 拦截机制，靠 `AGENTS.md` 约定：
 claude mcp add j-can-see -s user \
     -e J_SEE_TOKEN='给朋友的独立key' \
     -e J_SEE_BASE_URL='https://你的代理地址' \
+    -e J_SEE_MODEL='grok-4.5' \
     -- npx -y j-can-see
 ```
 

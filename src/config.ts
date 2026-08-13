@@ -21,8 +21,10 @@ const envSchema = z.object({
     .url("J_SEE_BASE_URL 不是合法 URL")
     .transform((s) => s.replace(/\/+$/, "")),
 
-  // 视觉模型名
-  J_SEE_MODEL: z.string().min(1).default("grok-4.5"),
+  // 视觉模型名（必须显式配置，不内嵌默认值，避免误用错误模型）
+  J_SEE_MODEL: z
+    .string()
+    .min(1, "J_SEE_MODEL 未配置：需要视觉模型名"),
 
   // 推理强度。实测 CLIProxyAPI 转换层不会把 none 真正关到 0，
   // 但 none 仍能比默认快约一倍、省约 28% token，且识别质量无损
