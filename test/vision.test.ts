@@ -210,6 +210,40 @@ describe("callVision", () => {
       expect(body.input[0].content[1].text).toBe("描述");
     });
 
+    it("未显式指定 API_SPEC 时默认走 /v1/responses，而非 openai", async () => {
+      const f = mockFetch({
+        ok: true,
+        body: {
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "默认 responses" }],
+            },
+          ],
+        },
+      });
+      const { J_SEE_API_SPEC: _omit, ...missingSpecConfig } = responsesConfig;
+      const text = await callVision(
+        INPUT,
+        missingSpecConfig as AppConfig,
+        f,
+      );
+      expect(text).toBe("默认 responses");
+      expect(f.calls[0][0]).toBe("https://example.com/v1/responses");
+    });
+
+    it("未知 API_SPEC 直接抛错，不静默降级", async () => {
+      const f = mockFetch({ ok: true, body: {} });
+      await expect(
+        callVision(
+          INPUT,
+          { ...config, J_SEE_API_SPEC: "gemini" as never },
+          f,
+        ),
+      ).rejects.toThrow(/不支持的 J_SEE_API_SPEC/);
+    });
+
     it("401 抛 VisionError 且携带 status", async () => {
       const f = mockFetch({
         ok: false,

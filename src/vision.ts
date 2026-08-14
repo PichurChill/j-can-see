@@ -158,12 +158,19 @@ function buildRequest(
   config: AppConfig,
 ): VisionRequest {
   switch (config.J_SEE_API_SPEC) {
+    // 与 loadConfig 的默认值保持一致：直接调用 callVision 且未显式配置时
+    // 不应静默落到 openai 分支。
+    case undefined:
     case "responses":
       return buildResponsesRequest(input, config);
+    case "openai":
+      return buildOpenAIRequest(input, config);
     case "anthropic":
       return buildAnthropicRequest(input, config);
     default:
-      return buildOpenAIRequest(input, config);
+      throw new VisionError(
+        `不支持的 J_SEE_API_SPEC: ${JSON.stringify(config.J_SEE_API_SPEC)}，支持 responses / openai / anthropic`,
+      );
   }
 }
 
@@ -230,12 +237,17 @@ function parseAnthropicContent(data: unknown): string {
 /** 按规范选择响应解析器 */
 function parseContent(data: unknown, config: AppConfig): string {
   switch (config.J_SEE_API_SPEC) {
+    case undefined:
     case "responses":
       return parseResponsesContent(data);
+    case "openai":
+      return parseOpenAIContent(data);
     case "anthropic":
       return parseAnthropicContent(data);
     default:
-      return parseOpenAIContent(data);
+      throw new VisionError(
+        `不支持的 J_SEE_API_SPEC: ${JSON.stringify(config.J_SEE_API_SPEC)}，支持 responses / openai / anthropic`,
+      );
   }
 }
 
