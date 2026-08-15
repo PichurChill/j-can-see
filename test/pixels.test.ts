@@ -1,0 +1,298 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { Jimp } from "jimp";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import {
+  CROP_TOOL,
+  IMAGE_DIFF_TOOL,
+  COLORS_TOOL,
+} from "../src/tools/pixels.js";
+import { deriveDefaultOutput } from "../src/tools/output.js";
+import { runLocal, makePng, readerFrom } from "./helpers.js";
+
+let tmpDir: string;
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "jcs-pixels-"));
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+describe("deriveDefaultOutput", () => {
+  it("~/x.png 默认输出展开到家目录（与读取侧对称）", () => {
+    expect(deriveDefaultOutput("~/x.png", "_crop", ".png")).toBe(
+      path.join(os.homedir(), "x_crop.png"),
+    );
+  });
+
+  it("普通路径去扩展名拼后缀", () => {
+    expect(deriveDefaultOutput("/tmp/a/b.png", "_crop", ".png")).toBe(
+      "/tmp/a/b_crop.png",
+    );
+  });
+
+  it("URL/clipboard/latest 拒绝默认输出", () => {
+    expect(() =>
+      deriveDefaultOutput("https://x.com/a.png", "_crop", ".png"),
+    ).toThrow(/必须显式指定 output/);
+    expect(() => deriveDefaultOutput("clipboard", "_fg", ".png")).toThrow(
+      /必须显式指定 output/,
+    );
+    expect(() => deriveDefaultOutput("latest", "_fg", ".png")).toThrow(
+      /必须显式指定 output/,
+    );
+  });
+});
+
+describe("CROP_TOOL", () => {
+  it("按 region 裁剪并保存为 PNG", async () => {
+    const src = path.join(tmpDir, "src.png");
+    const out = path.join(tmpDir, "out.png");
+    const png = await makePng(100, 80, 0xff0000ff);
+    const text = await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,30,30", output: out },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    expect(text).toContain(out);
+    expect(text).toContain("30×30");
+    const saved = await Jimp.read(await fs.readFile(out));
+    expect(saved.width).toBe(30);
+    expect(saved.height).toBe(30);
+  });
+
+  it("region 越界自动 clamp 到图片边界（不再抛 jimp RangeError）", async () => {
+    const src = path.join(tmpDir, "src.png");
+    const out = path.join(tmpDir, "out.png");
+    const png = await makePng(100, 100);
+    const text = await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,500,500", output: out },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    expect(text).toContain("100×100");
+    const saved = await Jimp.read(await fs.readFile(out));
+    expect(saved.width).toBe(100);
+    expect(saved.height).toBe(100);
+  });
+
+  it("本地文件 source 省略 output 时在源文件同目录生成 _crop.png", async () => {
+    const src = path.join(tmpDir, "src2.png");
+    const png = await makePng(50, 50);
+    const text = await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,10,10" },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    const expected = path.join(tmpDir, "src2_crop.png");
+    expect(text).toContain(expected);
+    await expect(fs.access(expected)).resolves.toBeUndefined();
+  });
+
+  it("URL / clipboard / latest source 省略 output 时明确报错（不写非法路径/cwd）", async () => {
+    const png = await makePng(50, 50);
+    for (const src of ["https://example.com/a.png", "clipboard", "latest"]) {
+      await expect(
+        runLocal(
+          CROP_TOOL,
+          { source: src, region: "0,0,10,10" },
+          { reader: readerFrom({ [src]: png }) },
+        ),
+      ).rejects.toThrow(/必须显式指定 output/);
+    }
+  });
+
+  it("output 指向不存在目录时报可读错误（含路径）", async () => {
+    const src = path.join(tmpDir, "src3.png");
+    const png = await makePng(20, 20);
+    await expect(
+      runLocal(
+        CROP_TOOL,
+        {
+          source: src,
+          region: "0,0,10,10",
+          output: path.join(tmpDir, "no-such-dir", "x.png"),
+        },
+        { reader: readerFrom({ [src]: png }) },
+      ),
+    ).rejects.toThrow(/写入输出文件失败/);
+  });
+
+  it("scale 放大裁剪结果", async () => {
+    const src = path.join(tmpDir, "src.png");
+    const out = path.join(tmpDir, "out.png");
+    const png = await makePng(100, 80);
+    await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,10,10", output: out, scale: 4 },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    const saved = await Jimp.read(await fs.readFile(out));
+    expect(saved.width).toBe(40);
+    expect(saved.height).toBe(40);
+  });
+
+  it(".jpg 输出按扩展名编码为 JPEG（magic ffd8 而非 PNG 8950）", async () => {
+    const src = path.join(tmpDir, "src.png");
+    const out = path.join(tmpDir, "out.jpg");
+    const png = await makePng(50, 50);
+    await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,20,20", output: out },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    const bytes = await fs.readFile(out);
+    expect(bytes[0]).toBe(0xff);
+    expect(bytes[1]).toBe(0xd8);
+  });
+
+  it("非法 region 被 schema 拒绝（格式与 parseRegion 同一真值来源）", () => {
+    expect(
+      CROP_TOOL.schema.safeParse({ source: "x.png", region: "abc" }).success,
+    ).toBe(false);
+    expect(
+      CROP_TOOL.schema.safeParse({ source: "x.png", region: "-1,2,3,4" })
+        .success,
+    ).toBe(false);
+    expect(
+      CROP_TOOL.schema.safeParse({ source: "x.png", region: "1,2,3,4" }).success,
+    ).toBe(true);
+  });
+});
+
+describe("IMAGE_DIFF_TOOL", () => {
+  it("完全相同的图差异为 0%", async () => {
+    const png = await makePng(60, 60, 0x00ff00ff);
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": png, "b.png": png }) },
+    );
+    expect(text).toContain("差异比例：0.00%");
+    expect(text).toContain("无明显差异区域");
+  });
+
+  it("完全不同的图差异接近 100% 且给出网格块坐标", async () => {
+    const a = await makePng(60, 60, 0x000000ff);
+    const b = await makePng(60, 60, 0xffffffff);
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }) },
+    );
+    expect(text).toMatch(/差异比例：(9\d|100)/);
+    // 措辞须如实说明这是网格块而非精确包围盒
+    expect(text).toContain("网格块");
+    expect(text).toContain("非精确包围盒");
+    expect(text).toMatch(/x1: \d+, y1: \d+, x2: \d+, y2: \d+/);
+  });
+
+  it("尺寸不同的图会先对齐再比较，并披露对齐行为", async () => {
+    const a = await makePng(40, 40, 0xff0000ff);
+    const b = await makePng(80, 80, 0xff0000ff); // 颜色相同，对齐后应无差异
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }) },
+    );
+    expect(text).toContain("差异比例：0.00%");
+    expect(text).toContain("两图尺寸不同");
+    expect(text).toContain("B 已缩放对齐到 A");
+  });
+
+  it("双方全透明的像素视为相同（RGB 是未定义值，不该计入差异）", async () => {
+    // 同为 alpha=0 但 RGB 迥异
+    const a = await makePng(40, 40, 0xff000000);
+    const b = await makePng(40, 40, 0x00ff0000);
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }) },
+    );
+    expect(text).toContain("差异比例：0.00%");
+  });
+
+  it("透明度变化直接计为差异（RGB 相同也算变了）", async () => {
+    const a = await makePng(40, 40, 0xff0000ff); // 不透明红
+    const b = await makePng(40, 40, 0xff000000); // 全透明红：RGB 相同
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }) },
+    );
+    expect(text).toContain("差异比例：100.00%");
+  });
+});
+
+describe("COLORS_TOOL", () => {
+  it("纯色图主色为真实色值（非量化值）且占比 100%", async () => {
+    const png = await makePng(50, 50, 0xff0000ff); // 纯红
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("#ff0000"); // 真实均值色，不是量化后的 #f80000
+    expect(text).not.toContain("#f80000");
+    expect(text).toContain("100.0%");
+  });
+
+  it("非整齐色值同样返回真实均值（量化只作聚类键）", async () => {
+    // #FEFEFE 量化后是 #F8F8F8，若直接输出量化值这里就会失败
+    const png = await makePng(30, 30, 0xfefefeff);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("#fefefe");
+  });
+
+  it("candidates 返回最接近的候选色", async () => {
+    const png = await makePng(50, 50, 0xff0000ff);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", candidates: ["#00ff00", "#ff0000", "#0000ff"] },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("最接近候选色 #ff0000");
+  });
+
+  it("candidates 含非法 hex 时抛 ImageError（不静默返回错误候选）", async () => {
+    const png = await makePng(50, 50, 0xff0000ff);
+    await expect(
+      runLocal(
+        COLORS_TOOL,
+        { source: "x.png", candidates: ["#00ff00", "#xyz"] },
+        { reader: readerFrom({ "x.png": png }) },
+      ),
+    ).rejects.toMatchObject({ name: "ImageError" });
+  });
+
+  it("全透明图返回无可分析提示", async () => {
+    const png = await makePng(20, 20, 0xc8181800); // RGB 有值但 alpha=0
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("完全透明");
+  });
+
+  it("region 限定分析范围", async () => {
+    // 左红右绿的图，region 限定左半，主色应为红
+    const img = new Jimp({ width: 40, height: 20, color: 0xff0000ff });
+    img.composite(new Jimp({ width: 20, height: 20, color: 0x00ff00ff }), 20, 0);
+    const png = await img.getBuffer("image/png");
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", region: "0,0,20,20" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("#ff0000");
+    expect(text).not.toContain("#00ff00");
+  });
+});

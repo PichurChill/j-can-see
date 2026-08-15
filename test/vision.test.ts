@@ -1,17 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { callVision, type FetchLike } from "../src/vision.js";
 import type { AppConfig } from "../src/config.js";
+import { TEST_CONFIG } from "./helpers.js";
 
-const config: AppConfig = {
-  J_SEE_TOKEN: "tok",
-  J_SEE_BASE_URL: "https://example.com",
-  J_SEE_MODEL: "grok-4.5",
-  J_SEE_API_SPEC: "openai",
-  J_SEE_REASONING: "none",
-  J_SEE_MAX_EDGE: 1568,
-  J_SEE_MAX_BYTES: 50 * 1024 * 1024,
-  J_SEE_TIMEOUT_MS: 90000,
-};
+const config: AppConfig = { ...TEST_CONFIG, J_SEE_MODEL: "grok-4.5" };
 
 function mockFetch(opts: {
   ok: boolean;
@@ -34,7 +26,10 @@ function mockFetch(opts: {
   return fn;
 }
 
-const INPUT = { base64: "AAA", mime: "image/jpeg", prompt: "描述" };
+const INPUT = {
+  images: [{ base64: "AAA", mime: "image/jpeg" }],
+  prompt: "描述",
+};
 
 describe("callVision", () => {
   it("成功返回文本，请求带 UA + token + 正确 URL", async () => {
@@ -106,6 +101,54 @@ describe("callVision", () => {
     await expect(callVision(INPUT, config, f)).rejects.toMatchObject({
       name: "VisionError",
     });
+  });
+
+  it("多图：每张图生成独立 image block，prompt 在最后", async () => {
+    const f = mockFetch({
+      ok: true,
+      body: { choices: [{ message: { content: "对比结果" } }] },
+    });
+    const multi = {
+      images: [
+        { base64: "AAA", mime: "image/jpeg" },
+        { base64: "BBB", mime: "image/png" },
+      ],
+      prompt: "两张图有什么不同",
+    };
+    await callVision(multi, config, f);
+    const body = JSON.parse(f.calls[0][1].body as string);
+    const content = body.messages[0].content;
+    expect(content).toHaveLength(3);
+    expect(content[0].type).toBe("image_url");
+    expect(content[0].image_url.url).toMatch(/^data:image\/jpeg;base64,AAA$/);
+    expect(content[1].type).toBe("image_url");
+    expect(content[1].image_url.url).toMatch(/^data:image\/png;base64,BBB$/);
+    expect(content[2].type).toBe("text");
+    expect(content[2].text).toBe("两张图有什么不同");
+  });
+
+  it("maxTokens 覆盖输出上限（openai 规范）", async () => {
+    const f = mockFetch({
+      ok: true,
+      body: { choices: [{ message: { content: "ok" } }] },
+    });
+    await callVision(
+      { ...INPUT, maxTokens: 8192 },
+      config,
+      f,
+    );
+    const body = JSON.parse(f.calls[0][1].body as string);
+    expect(body.max_tokens).toBe(8192);
+  });
+
+  it("省略 maxTokens 时 openai 默认 2000", async () => {
+    const f = mockFetch({
+      ok: true,
+      body: { choices: [{ message: { content: "ok" } }] },
+    });
+    await callVision(INPUT, config, f);
+    const body = JSON.parse(f.calls[0][1].body as string);
+    expect(body.max_tokens).toBe(2000);
   });
 
   describe("anthropic 规范", () => {
@@ -294,6 +337,26 @@ describe("callVision", () => {
       await expect(callVision(INPUT, responsesConfig, f)).rejects.toMatchObject(
         { name: "VisionError", status: 404 },
       );
+    });
+
+    it("maxTokens 映射为 max_output_tokens；省略时不设", async () => {
+      const ok = {
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "ok" }],
+          },
+        ],
+      };
+      const withLimit = mockFetch({ ok: true, body: ok });
+      await callVision({ ...INPUT, maxTokens: 8192 }, responsesConfig, withLimit);
+      let body = JSON.parse(withLimit.calls[0][1].body as string);
+      expect(body.max_output_tokens).toBe(8192);
+
+      const noLimit = mockFetch({ ok: true, body: ok });
+      await callVision(INPUT, responsesConfig, noLimit);
+      body = JSON.parse(noLimit.calls[0][1].body as string);
+      expect(body.max_output_tokens).toBeUndefined();
     });
   });
 });

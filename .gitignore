@@ -10,3 +10,6 @@ coverage/
 
 # ZCode IDE 本地文件（计划/会话），不上传
 .zcode/
+
+# Claude Code 本地权限配置（机器本地），不上传
+.claude/settings.local.json

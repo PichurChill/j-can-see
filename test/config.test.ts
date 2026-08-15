@@ -1,11 +1,43 @@
 import { describe, it, expect } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, loadBaseConfig } from "../src/config.js";
 
 const BASE = {
   J_SEE_TOKEN: "tok_x",
   J_SEE_BASE_URL: "https://example.com",
   J_SEE_MODEL: "grok-4.5",
 } as const;
+
+describe("loadBaseConfig", () => {
+  it("空环境可用（纯本地工具模式），base 项默认值齐全", () => {
+    const c = loadBaseConfig({});
+    expect(c.J_SEE_MAX_BYTES).toBe(50 * 1024 * 1024);
+    expect(c.J_SEE_MAX_EDGE).toBe(1568);
+    expect(c.J_SEE_MAX_PIXELS).toBe(40_000_000);
+    expect(c.J_SEE_API_SPEC).toBe("responses");
+  });
+
+  it("不含视觉字段：不再用空串伪造占位", () => {
+    const c = loadBaseConfig({ ...BASE });
+    expect("J_SEE_TOKEN" in c).toBe(false);
+    expect("J_SEE_BASE_URL" in c).toBe(false);
+    expect("J_SEE_MODEL" in c).toBe(false);
+  });
+
+  it("base 项显式配置生效", () => {
+    expect(loadBaseConfig({ J_SEE_MAX_BYTES: "1024" }).J_SEE_MAX_BYTES).toBe(
+      1024,
+    );
+    expect(
+      loadBaseConfig({ J_SEE_MAX_PIXELS: "1000000" }).J_SEE_MAX_PIXELS,
+    ).toBe(1000000);
+  });
+
+  it("base 项非法时仍抛 ConfigError（如非法 API_SPEC）", () => {
+    expect(() => loadBaseConfig({ J_SEE_API_SPEC: "gemini" })).toThrow(
+      /J_SEE_API_SPEC/,
+    );
+  });
+});
 
 describe("loadConfig", () => {
   it("应用默认值", () => {
@@ -33,6 +65,26 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ J_SEE_BASE_URL: "https://x.com" })).toThrow(
       /J_SEE_TOKEN/,
     );
+  });
+
+  it("变量完全缺失（undefined）也用可读中文提示，而非 zod 默认英文文案", () => {
+    expect(() => loadConfig({})).toThrow(/J_SEE_TOKEN 未配置/);
+    expect(() => loadConfig({ J_SEE_TOKEN: "x" })).toThrow(
+      /J_SEE_BASE_URL 未配置/,
+    );
+    expect(() =>
+      loadConfig({ J_SEE_TOKEN: "x", J_SEE_BASE_URL: "https://x.com" }),
+    ).toThrow(/J_SEE_MODEL 未配置/);
+  });
+
+  it("传空串同样报「未配置」", () => {
+    expect(() =>
+      loadConfig({
+        J_SEE_TOKEN: "",
+        J_SEE_BASE_URL: "https://x.com",
+        J_SEE_MODEL: "m",
+      }),
+    ).toThrow(/J_SEE_TOKEN 未配置/);
   });
 
   it("缺少 BASE_URL 抛错", () => {

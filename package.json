@@ -1,7 +1,7 @@
 {
   "name": "j-can-see",
-  "version": "0.4.2",
-  "description": "MCP server that routes images (local file / URL / clipboard / latest screenshot) to a vision model via an OpenAI-compatible or Anthropic API. For AI coding clients whose primary model has no multimodal input.",
+  "version": "0.5.0",
+  "description": "MCP server that gives text-only AI coding agents a vision toolkit: describe/OCR images, locate elements with pixel coordinates, diff images, pick exact colors, trace SVGs — for clients whose primary model has no multimodal input.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,7 +20,9 @@
     "dist",
     "hooks",
     "README.md",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "SKILL.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
@@ -33,7 +35,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@image-tracer-ts/core": "^1.0.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "image-size": "^2.0.0",
     "jimp": "^1.6.1",
     "zod": "^4.4.3"
   },
@@ -50,6 +54,13 @@
     "ocr",
     "claude-code",
     "codex",
-    "grok"
+    "grok",
+    "locate",
+    "inspect",
+    "image-diff",
+    "color-picker",
+    "svg",
+    "vectorize",
+    "ui-restoration"
   ]
 }

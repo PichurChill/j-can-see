@@ -5,13 +5,14 @@
  * 显式 User-Agent —— 部分图床/CDN 同样有 bot 防护。
  */
 import { SourceError } from "../errors.js";
+import { VERSION } from "../version.js";
 
 export async function readFromUrl(url: string): Promise<Buffer> {
   let resp: Response;
   try {
     resp = await fetch(url, {
       redirect: "follow",
-      headers: { "User-Agent": "j-can-see/0.1 (mcp-vision-client)" },
+      headers: { "User-Agent": `j-can-see/${VERSION} (mcp-vision-client)` },
     });
   } catch (e) {
     throw new SourceError(

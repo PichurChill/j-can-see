@@ -57,9 +57,10 @@ claude mcp add j-can-see -s user \
 | `J_SEE_REASONING` | 否 | `none` | 推理强度（**仅 `openai` 规范生效**）：`none` / `low` / `medium` / `high` |
 | `J_SEE_MAX_EDGE` | 否 | `1568` | 图片压缩长边像素上限 |
 | `J_SEE_MAX_BYTES` | 否 | `52428800` | 源文件体积上限（字节），超出拒绝 |
+| `J_SEE_MAX_PIXELS` | 否 | `40000000` | 解码后像素数上限（宽×高），**在解码前**从图片 header 读尺寸判定。`J_SEE_MAX_BYTES` 管的是*压缩后*体积——大面积纯色 PNG 可以只有几 KB 却解出巨大 bitmap |
 | `J_SEE_TIMEOUT_MS` | 否 | `90000` | 视觉调用超时（毫秒） |
 
-缺必填项 → 启动即崩并打印原因（fail fast）。
+缺 `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL` **不影响 server 启动**：本地像素工具照常可用（stderr 留一条提示），视觉工具在被调用时返回清晰的配置错误。任何变量填了非法值仍然 fail fast。
 
 > `J_SEE_MODEL` 无默认值：填你的代理实际支持的视觉模型名。实测 `grok-4.5` 在同等识图质量下 token 消耗较低，可作为参考选择。
 
@@ -88,14 +89,46 @@ claude mcp add j-can-see -s user \
 > - 三种规范实测都**关不掉推理**——转换层不透传 effort，单次识图仍有数百 reasoning tokens（`responses` ≈ 500、`openai` ≈ 900、`anthropic` 不开 thinking），识别质量无损，可接受。
 > - 默认 `responses`：若你的代理不支持 `/v1/responses`（返回 404），错误信息会提示"可设置 `J_SEE_API_SPEC=openai`"（**不静默降级**——失败原样上报，由你显式决定换规范）。
 
-## 工具：`see_image`
+## 工具集
+
+j-can-see 提供 9 个工具，AI 会根据任务自动选择——你的使用方式不变（贴图 + 一句话指令），能力长在工具里。
+
+### 视觉工具（调用视觉模型，共用 `J_SEE_*` 配置）
+
+| 工具 | 回答的问题 |
+|---|---|
+| `see_image` | 这张图是什么 / 说了什么？（支持 `region` 局部放大、多图对比） |
+| `locate` | 某个东西在哪？→ 单个目标的像素坐标 |
+| `inspect` | 所有同类元素在哪？→ 编号列表 + 文字 + 坐标 |
+| `ocr_long` | 这张超长截图的文字？→ 分块 OCR + 合并去重，并逐条报告边界处理结果（含**未能去重**的边界） |
+
+### 本地工具（纯像素操作，不调视觉模型，**无需视觉配置**）
+
+> 纯本地模式：即使完全不配置 `J_SEE_*` 环境变量，server 也能启动，本地工具全部可用（启动时 stderr 会提示视觉配置缺失；调用视觉工具时才校验并返回清晰的配置错误）。
+
+| 工具 | 回答的问题 |
+|---|---|
+| `crop` | 把这块裁出来存成文件（可放大，按扩展名编码 .png/.jpg） |
+| `image_diff` | 这两张图哪里不同？→ 差异% + 差异密度最高的网格块（12×12 等分，**非精确包围盒**） |
+| `colors` | 这里到底是什么颜色？→ 精确色值（不靠"浅灰"这种模糊描述）。按 5 位量化分桶：适合 UI 纯色，渐变会被打散 |
+| `trace` | 这个图形的矢量形状？→ SVG（仅适合扁平高对比图形） |
+| `extract_fg` | 把这个图标抠成透明 PNG |
+
+> **坐标系统一为原图像素**：`locate` / `inspect` 返回的坐标可直接喂给 `see_image` / `crop` 的 `region` 参数。
+>
+> **核心原则**：像素级事实（颜色 / 坐标 / 差异）不信任视觉模型的文字描述——用 `colors` / `image_diff` / `trace` 取真值。
+
+### `see_image`
 
 ```typescript
 see_image({
-  source: string,   // 见下表
-  prompt?: string   // 省略则"详细描述图片内容，含文字/UI/颜色/布局"
-}) → string         // 模型返回的文字描述
+  source: string | string[],   // 单图或多图对比
+  prompt?: string,             // 省略则"详细描述图片内容，含文字/UI/颜色/布局"
+  region?: "x1,y1,x2,y2"       // 原图像素坐标，先裁后看（常配合 locate/inspect）
+}) → string                    // 模型返回的文字描述
 ```
+
+> 更详细的使用方法论与场景 playbook 见 [`SKILL.md`](./SKILL.md)。
 
 ## CLI 命令
 

@@ -15,12 +15,30 @@
  */
 import { VisionError } from "./errors.js";
 import type { AppConfig } from "./config.js";
+import { VERSION } from "./version.js";
 
-export interface VisionInput {
+/** 单张图片的编码数据 */
+export interface VisionImage {
   readonly base64: string;
   readonly mime: string;
-  readonly prompt: string;
 }
+
+/**
+ * 视觉调用输入。images 支持多张（多图对比 / 多图问答），
+ * 单图是其特例（长度为 1 的数组）。
+ */
+export interface VisionInput {
+  readonly images: ReadonlyArray<VisionImage>;
+  readonly prompt: string;
+  /**
+   * 输出 token 上限。省略时 openai/anthropic 用 2000、responses 不设。
+   * 密集 inspect / 长 OCR 块应显式传大值（如 8192）避免截断。
+   */
+  readonly maxTokens?: number;
+}
+
+/** openai/anthropic 规范的默认输出上限 */
+const DEFAULT_MAX_TOKENS = 2000;
 
 /** 可注入的 fetch 类型，便于测试用 mock 替换 */
 export type FetchLike = (
@@ -38,8 +56,8 @@ interface VisionRequest {
 /** Anthropic Messages API 要求的版本头 */
 const ANTHROPIC_VERSION = "2023-06-01";
 
-/** 三种规范共用的 UA */
-const USER_AGENT = "j-can-see/0.1 (mcp-vision-client)";
+/** 三种规范共用的 UA —— 版本号取自 package.json，不再写死 */
+const USER_AGENT = `j-can-see/${VERSION} (mcp-vision-client)`;
 
 /**
  * OpenAI Responses 请求（/v1/responses，GPT-5 / Codex 原生接口）。
@@ -61,14 +79,16 @@ function buildResponsesRequest(
     body: JSON.stringify({
       model: config.J_SEE_MODEL,
       stream: false,
+      // responses 默认不设输出上限（保持既有行为），显式传 maxTokens 时生效
+      ...(input.maxTokens != null ? { max_output_tokens: input.maxTokens } : {}),
       input: [
         {
           role: "user",
           content: [
-            {
+            ...input.images.map((img) => ({
               type: "input_image",
-              image_url: `data:${input.mime};base64,${input.base64}`,
-            },
+              image_url: `data:${img.mime};base64,${img.base64}`,
+            })),
             { type: "input_text", text: input.prompt },
           ],
         },
@@ -92,18 +112,18 @@ function buildOpenAIRequest(
     },
     body: JSON.stringify({
       model: config.J_SEE_MODEL,
-      max_tokens: 2000,
+      max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
       reasoning_effort: config.J_SEE_REASONING,
       messages: [
         {
           role: "user",
           content: [
-            {
+            ...input.images.map((img) => ({
               type: "image_url",
               image_url: {
-                url: `data:${input.mime};base64,${input.base64}`,
+                url: `data:${img.mime};base64,${img.base64}`,
               },
-            },
+            })),
             { type: "text", text: input.prompt },
           ],
         },
@@ -131,19 +151,19 @@ function buildAnthropicRequest(
     },
     body: JSON.stringify({
       model: config.J_SEE_MODEL,
-      max_tokens: 2000,
+      max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: [
         {
           role: "user",
           content: [
-            {
+            ...input.images.map((img) => ({
               type: "image",
               source: {
                 type: "base64",
-                media_type: input.mime,
-                data: input.base64,
+                media_type: img.mime,
+                data: img.base64,
               },
-            },
+            })),
             { type: "text", text: input.prompt },
           ],
         },

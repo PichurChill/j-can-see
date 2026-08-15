@@ -2,7 +2,9 @@
 /**
  * j-can-see MCP server 入口（stdio 传输）。
  *
- * 仅暴露一个 see_image 工具。配置缺失 → 启动即崩并打印原因（fail fast）。
+ * 暴露一组视觉/像素工具（see_image / locate / inspect / ...）。
+ * 视觉配置为懒校验：缺 J_SEE_* 时 server 照常启动、本地像素工具全部可用，
+ * 仅在 stderr 留警告；视觉工具在调用时才完整校验并返回 ConfigError。
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -10,8 +12,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { loadConfig } from "./config.js";
-import { seeImage, SEE_IMAGE_TOOL, seeImageArgsSchema } from "./tool.js";
+import { loadConfig, loadBaseConfig } from "./config.js";
+import { listTools, getTool } from "./tools/registry.js";
+import { VERSION } from "./version.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -38,27 +41,38 @@ if (argv.includes("--hook") || argv.includes("--print-hook")) {
 }
 
 function main(): void {
-  const config = loadConfig();
+  // 视觉配置懒校验：缺 J_SEE_* 时 server 仍启动（本地工具可用），
+  // 仅在 stderr 留警告；视觉工具调用时才做完整校验并返回 ConfigError
+  try {
+    loadConfig();
+  } catch (e) {
+    console.error(
+      `[j-can-see] 视觉配置缺失，仅本地工具（crop/image_diff/colors/trace/extract_fg）可用：\n${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
 
   const server = new Server(
-    { name: "j-can-see", version: "0.4.1" },
+    { name: "j-can-see", version: VERSION },
     { capabilities: { tools: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [SEE_IMAGE_TOOL],
+    tools: listTools(),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    if (name !== "see_image") {
+    const entry = getTool(name);
+    if (!entry) {
       return {
         isError: true,
         content: [{ type: "text" as const, text: `未知工具：${name}` }],
       };
     }
 
-    const parsed = seeImageArgsSchema.safeParse(args);
+    const parsed = entry.schema.safeParse(args);
     if (!parsed.success) {
       return {
         isError: true,
@@ -74,7 +88,11 @@ function main(): void {
     }
 
     try {
-      const text = await seeImage(parsed.data, config);
+      // 判别联合按 needsVision 收窄：本地工具拿 BaseConfig（零视觉配置可用），
+      // 视觉工具拿完整校验过的 AppConfig
+      const text = entry.needsVision
+        ? await entry.run(parsed.data, loadConfig())
+        : await entry.run(parsed.data, loadBaseConfig());
       return { content: [{ type: "text" as const, text }] };
     } catch (e) {
       // 运行期错误（来源/图片/视觉调用）以 isError 形式返回，
@@ -98,8 +116,6 @@ try {
   main();
 } catch (e) {
   // 启动期错误（主要是配置缺失）—— 打印清晰原因后退出
-  console.error(
-    `[j-can-see] ${e instanceof Error ? e.message : String(e)}`,
-  );
+  console.error(`[j-can-see] ${e instanceof Error ? e.message : String(e)}`);
   process.exit(1);
 }

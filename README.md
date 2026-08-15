@@ -57,9 +57,10 @@ Add this to the `mcpServers` section of `~/.claude.json`:
 | `J_SEE_REASONING` | No | `none` | Reasoning effort (**only honored by the `openai` spec**): `none` / `low` / `medium` / `high` |
 | `J_SEE_MAX_EDGE` | No | `1568` | Max long-edge pixels for image compression |
 | `J_SEE_MAX_BYTES` | No | `52428800` | Max source file size in bytes; larger is rejected |
+| `J_SEE_MAX_PIXELS` | No | `40000000` | Max decoded pixels (w×h), checked from the image header **before** decoding. `J_SEE_MAX_BYTES` only caps *compressed* size — a mostly-solid PNG can be a few KB yet decode to a multi-GB bitmap |
 | `J_SEE_TIMEOUT_MS` | No | `90000` | Vision call timeout in milliseconds |
 
-Missing required variables → crash on startup with a clear reason (fail fast).
+Missing `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL` does **not** stop the server: local pixel tools keep working (a warning goes to stderr) and vision tools return a clear config error when called. Malformed values in any variable still fail fast.
 
 > `J_SEE_MODEL` has no default: use the vision model your endpoint actually supports. In testing, `grok-4.5` used fewer tokens than other candidates at equal description quality.
 
@@ -88,14 +89,46 @@ claude mcp add j-can-see -s user \
 > - In practice, none of the three specs can fully turn off reasoning — the translation layer doesn't pass through effort, so a single vision call still burns a few hundred reasoning tokens (`responses` ≈ 500, `openai` ≈ 900, `anthropic` keeps thinking off by default). Quality is unaffected; this is acceptable.
 > - Default `responses`: if your proxy doesn't support `/v1/responses` (returns 404), the error message will suggest setting `J_SEE_API_SPEC=openai` (**no silent fallback** — errors are reported as-is, and you decide explicitly to switch specs).
 
-## Tool: `see_image`
+## Tools
+
+j-can-see ships 9 tools; the AI picks the right one for the task. Your workflow stays the same (paste an image + a one-line instruction) — the capability lives in the tools.
+
+### Vision tools (call the vision model, share `J_SEE_*` config)
+
+| Tool | Question it answers |
+|---|---|
+| `see_image` | What's in this image? (supports `region` zoom-in, multi-image compare) |
+| `locate` | Where is this one thing? → pixel coords of a single target |
+| `inspect` | Where are all of these? → numbered list + text + coords |
+| `ocr_long` | Text in this tall screenshot? → chunked OCR, merged, with a per-boundary dedup audit (including the boundaries it could **not** dedup) |
+
+### Local tools (pure pixel ops, no vision model, **no vision config needed**)
+
+> Local-only mode: the server starts and all local tools work even with zero `J_SEE_*` env vars (a stderr warning notes the missing vision config; vision tools are validated lazily at call time and return a clear config error).
+
+| Tool | Question it answers |
+|---|---|
+| `crop` | Cut this box out as a file (optional upscale; encodes .png/.jpg by extension) |
+| `image_diff` | What changed between these two? → diff% + the densest grid cells (12×12 split, **not** exact bounding boxes) |
+| `colors` | What's the exact color here? → precise hex (+ candidate match). Buckets colors 5-bit: great for flat UI colors, gradients get split across buckets |
+| `trace` | Vector shape of this flat graphic? → SVG |
+| `extract_fg` | Extract this icon as a transparent PNG |
+
+> **Coordinates are always original-image pixels**: coords from `locate`/`inspect` feed directly into the `region` param of `see_image`/`crop`.
+>
+> **Core principle**: never trust a prose answer for a pixel-level fact (color/size/coords). Use `colors` / `image_diff` / `trace` for ground truth.
+
+### `see_image`
 
 ```typescript
 see_image({
-  source: string,   // see table below
-  prompt?: string   // omitted → "describe the image in detail, including text/UI/colors/layout"
-}) → string         // text description returned by the model
+  source: string | string[],   // single image or multi-image compare
+  prompt?: string,             // omitted → "describe the image in detail, including text/UI/colors/layout"
+  region?: "x1,y1,x2,y2"       // original-image pixels, crop-then-look (pairs with locate/inspect)
+}) → string                    // text description returned by the model
 ```
+
+> See [`SKILL.md`](./SKILL.md) for the full usage methodology and playbooks.
 
 ## CLI
 

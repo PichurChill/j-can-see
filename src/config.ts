@@ -1,31 +1,40 @@
 /**
  * 应用配置：从环境变量读取并校验。
  *
- * 设计原则：缺必填项 → 启动即崩并打印清晰原因（fail fast），
- * 不带残缺配置进入运行时。
+ * 分两层：
+ *  - base：本地像素工具也需要的通用项，全部有默认值 —— 零配置即可用
+ *  - vision：调视觉模型才必须的三项，缺失不阻止 server 启动（懒校验），
+ *    视觉工具在调用时才做完整校验并返回 ConfigError
+ *
+ * 设计原则：校验失败 → 抛 ConfigError 并打印清晰原因，不带残缺配置进入运行时。
  */
 import { z } from "zod";
 import { ConfigError } from "./errors.js";
 
-const envSchema = z.object({
+/**
+ * 必填字符串：变量完全缺失（undefined）与传空串共用同一条可读提示。
+ * 只写 .min(1, msg) 的话，undefined 会先触发 invalid_type，
+ * 报出来的是 zod 默认英文文案（"Invalid input: expected string..."）。
+ */
+const required = (msg: string) => z.string({ error: msg }).min(1, msg);
+
+/** 视觉三项：调视觉模型时才必须（懒校验，支持纯本地工具模式） */
+const visionEnvSchema = z.object({
   // 识图通道专用 key（必须显式配置，不内嵌）
-  J_SEE_TOKEN: z
-    .string()
-    .min(1, "J_SEE_TOKEN 未配置：需要视觉模型的 API key"),
+  J_SEE_TOKEN: required("J_SEE_TOKEN 未配置：需要视觉模型的 API key"),
 
   // CLIProxyAPI / 兼容端点的根地址（必须显式配置）
   // 末尾斜杠在此处统一去除，下游直接拼接路径
-  J_SEE_BASE_URL: z
-    .string()
-    .min(1, "J_SEE_BASE_URL 未配置")
+  J_SEE_BASE_URL: required("J_SEE_BASE_URL 未配置")
     .url("J_SEE_BASE_URL 不是合法 URL")
     .transform((s) => s.replace(/\/+$/, "")),
 
   // 视觉模型名（必须显式配置，不内嵌默认值，避免误用错误模型）
-  J_SEE_MODEL: z
-    .string()
-    .min(1, "J_SEE_MODEL 未配置：需要视觉模型名"),
+  J_SEE_MODEL: required("J_SEE_MODEL 未配置：需要视觉模型名"),
+});
 
+/** 本地工具也用到的通用项（全部有默认值） */
+const baseEnvSchema = z.object({
   // 上游 API 规范：
   //  - responses = OpenAI Responses（/v1/responses），GPT-5 / Codex 原生接口，
   //    与 cc switch / Codex 生态对齐；默认选项
@@ -45,33 +54,73 @@ const envSchema = z.object({
   // 图片压缩目标：长边像素上限
   J_SEE_MAX_EDGE: z.coerce.number().int().positive().default(1568),
 
-  // 源文件体积上限（字节），超出直接拒绝以防解码爆内存
+  // 源文件体积上限（字节），超出直接拒绝
   J_SEE_MAX_BYTES: z.coerce
     .number()
     .int()
     .positive()
     .default(50 * 1024 * 1024),
 
+  // 解码后像素数上限。J_SEE_MAX_BYTES 管的是压缩后体积，拦不住高压缩比图 ——
+  // 大面积纯色 PNG 能以极小体积解出巨大 bitmap（压缩比可达 100:1 以上），
+  // 必须另设像素上限才真正防住解码爆内存。
+  // 40M 像素 ≈ 160MB RGBA，覆盖 8K 截图（7680×4320 ≈ 33M）
+  J_SEE_MAX_PIXELS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(40_000_000),
+
   // 视觉调用超时（毫秒）。需短于 CF Tunnel 的 100s 上限，
   // 让客户端先于 524 给出清晰错误
   J_SEE_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
 });
 
-export type AppConfig = z.infer<typeof envSchema>;
+const envSchema = visionEnvSchema.merge(baseEnvSchema);
+
+/** 本地像素工具所需配置（全部有默认值） */
+export type BaseConfig = z.infer<typeof baseEnvSchema>;
+
+/** 视觉调用专属配置 */
+export type VisionConfig = z.infer<typeof visionEnvSchema>;
 
 /**
- * 读取并校验配置。失败抛 ConfigError。
+ * 完整配置 = base + vision。
+ * 定义为交叉类型而非独立推断，以明确 AppConfig 是 BaseConfig 的超集 ——
+ * 视觉工具的 config 可以直接传给只要 BaseConfig 的图像处理函数。
+ */
+export type AppConfig = BaseConfig & VisionConfig;
+
+function toConfigError(error: z.ZodError): ConfigError {
+  const issues = error.issues
+    .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
+    .join("\n");
+  return new ConfigError(`配置无效，请检查环境变量：\n${issues}`);
+}
+
+/**
+ * 读取并校验完整配置（含视觉三项）。失败抛 ConfigError。
+ * 视觉工具调用时使用。
  * @param env 可注入，便于测试；默认读 process.env
  */
 export function loadConfig(
   env: Record<string, string | undefined> = process.env,
 ): AppConfig {
   const parsed = envSchema.safeParse(env);
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
-      .join("\n");
-    throw new ConfigError(`配置无效，请检查环境变量：\n${issues}`);
-  }
+  if (!parsed.success) throw toConfigError(parsed.error);
+  return parsed.data;
+}
+
+/**
+ * 仅本地工具（crop/image_diff/colors/trace/extract_fg）需要的配置：
+ * 不含视觉三项 —— 类型上就没有这些字段，本地工具误用会在编译期报错，
+ * 不需要（也绝不用）空串之类的占位值伪造。
+ * @param env 可注入，便于测试；默认读 process.env
+ */
+export function loadBaseConfig(
+  env: Record<string, string | undefined> = process.env,
+): BaseConfig {
+  const parsed = baseEnvSchema.safeParse(env);
+  if (!parsed.success) throw toConfigError(parsed.error);
   return parsed.data;
 }

@@ -30,15 +30,38 @@ export const defaultReader: SourceReader = {
   readLatestScreenshot,
 };
 
+/** source 字符串对应的来源类型 */
+export type SourceKind = "clipboard" | "latest" | "url" | "file";
+
+/**
+ * 判定 source 的来源类型。
+ *
+ * readSource 与需要按来源分支的工具（crop/extract_fg 推导默认输出路径时
+ * 必须区分「有本地路径可依」与「没有」）共用这一处判定 ——
+ * 两份独立实现会随新增来源类型而漂移。
+ */
+export function classifySource(source: string): SourceKind {
+  const s = source.trim();
+  if (!s) throw new SourceError("source 为空");
+  if (s === "clipboard") return "clipboard";
+  if (s === "latest") return "latest";
+  if (/^https?:\/\//i.test(s)) return "url";
+  return "file";
+}
+
 export async function readSource(
   source: string,
   reader: SourceReader = defaultReader,
 ): Promise<Buffer> {
   const s = source.trim();
-  if (!s) throw new SourceError("source 为空");
-
-  if (s === "clipboard") return reader.readClipboard();
-  if (s === "latest") return reader.readLatestScreenshot();
-  if (/^https?:\/\//i.test(s)) return reader.readFromUrl(s);
-  return reader.readFromFile(s);
+  switch (classifySource(s)) {
+    case "clipboard":
+      return reader.readClipboard();
+    case "latest":
+      return reader.readLatestScreenshot();
+    case "url":
+      return reader.readFromUrl(s);
+    case "file":
+      return reader.readFromFile(s);
+  }
 }
