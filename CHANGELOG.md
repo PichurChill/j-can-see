@@ -47,6 +47,37 @@
 - **locate 多匹配如实输出**：模型返回多个 box 时全部列出并提示细化 target（原先静默取第一个）
 - package-lock.json 版本与 package.json 同步（0.5.0）
 
+### Added / Changed（实测会话驱动的体验优化）
+
+- **ocr_long 总时间预算 + 部分返回**：新增 `J_SEE_OCR_TOTAL_TIMEOUT_MS`（默认 85s，低于常见客户端 MCP 工具超时如 ZCode 100s）。多块 OCR 预算耗尽时不再整单失败——返回已完成块的合并文本 + 未处理块的 y 区间 + crop 补齐建议；正文缺口处插入显式标记。真实错误（网络/上游拒绝）仍 fail fast。实测动机：860×7264 长图 6 块并发总时长破客户端 100s，整单被掐、颗粒无收
+- **callVision 支持单次超时覆盖**（`timeoutMs` 参数）：ocr_long 把每块超时压到剩余预算
+- **locate NOT_FOUND 附可操作建议**：提示长图先 crop 局部化再定位、或改用 inspect 枚举（实测中模型在压缩后的长图上必然找不到，干巴巴的"未找到"误导 AI 得出"定位功能不好用"）
+- **crop/extract_fg/trace 输出目录自动创建**（`mkdir -p`）：实测 AI 写新路径时 7 次 ENOENT 失败可避免
+- **启动清扫剪贴板中转残留**：server 启动时删除 os.tmpdir() 下自身命名空间（`j-can-see-clip-*.png`）的残留文件——正常路径由 finally 清理，仅进程被强杀时可能漏
+- **工作区约定**（SKILL.md）：中间产物进项目 `.j-can-see/<task>/`（首建时入 .gitignore、任务结束清理），交付物显式写正式路径——实测 AI 自选 /tmp/design 散落 24 文件无人清理
+- **文档**：README 中英补三层超时机制说明与 locate/inspect 的模型 grounding 选型建议（grok 系列定位偏弱，坐标任务建议 Gemini/Qwen-VL 类）
+
+### Fixed（第四轮评审修复）
+
+- **修复部分返回的假缺口标记（必现）**：拼装循环 `prev = -2` 初值导致「三块全部完成」的正文开头也插入一行描述为空的 `⋯⋯［ 未完成，内容缺失］⋯⋯`——「有标记 ⇔ 真缺块」是部分返回设计的支点，假标记会让 AI 误以为开头丢内容而触发无谓补齐。拼装逻辑抽为纯函数 `assembleChunks`（首块不产生标记；开头/中间/尾部缺口给出准确块号与 y 区间），契约由 5 组独立测试锁定，集成测试补反向断言「全部完成时不得出现内容缺失」
+- **预算内错误分类从「按发生时刻」改为「按错误类型」**：超时（`VisionError` + 视觉调用超时）→ 该块记未处理；其余错误哪怕恰在 deadline 之后到达也照常 fail fast 上报（原先按 `remaining() <= 0` 判断，理论上会把 deadline 后到达的真实故障吞成未处理）
+- **剪贴板中转清扫加 10 分钟 mtime 门限**：并行第二个实例正处于「写入→读取」窗口的新文件不再被启动清扫误删
+- 测试修正：替换一条零验证力的超时用例（mock 立即返回只证明不崩 → 改为小超时 + 尊重 abort 的慢上游，真实走默认超时路径）
+- **真实错误立即取消全部在途块调用**：`callVision` 新增外部 `AbortSignal` 参数，`ocrWithBudget` 在首个非超时错误时 abort 共享信号 —— fail fast 不再等在途调用各自跑满超时（原先最坏为数倍单次超时才见错误）。被取消的调用以超时同型错误退出，不影响已记录的真实错误优先上报
+
+### Fixed（第五轮评审修复）
+
+- **修复「传入时已 aborted 的 signal 不生效」**：`addEventListener` 对已触发过的 abort 事件不会回调，而传给 fetch 的是内部 controller.signal —— 并行块失败恰落在另一块的 JPEG 编码窗口（几十至几百 ms）时，该块的请求会照常发出、要等自身超时。现在 `callVision` 入口显式检查 `signal.aborted` 立即同步取消
+- **超时分类从「中文文案匹配」改为类型契约**：新增 `VisionTimeoutError extends VisionError` 子类（`instanceof VisionError` 处仍成立，向后兼容），`callVision` 超时抛子类、`ocrWithBudget` 按 `instanceof` 分类 —— vision.ts 的报错文案从此可以随意改，不会再静默破坏 ocr 的部分返回设计。补两个针对性测试：传入时已 aborted 的 signal 立即生效；真实 `callVision` 超时端到端归类为未处理（跨模块类型契约生效）
+- `assembleChunks` 的首块守卫从 `merged &&`（隐含依赖「每块内容非空」这一 callVision 的外部保证）改为显式的 `prev >= 0 &&`，语义直白不再有隐藏依赖
+
+### Fixed（第六轮评审，小项收口）
+
+- 补上「传入时已 aborted」用例中缺失的 `fetchCalled` 断言 —— 固化行为契约：实现仍带着 aborted signal 调 fetch（不跳过调用），快速退出依赖 fetch 规范的立即拒绝
+- **测试纳入类型检查**：新增 `tsconfig.test.json`（覆盖 src + test，noEmit），`npm test` 先跑 typecheck 再跑 vitest，`prepublishOnly` 同样把关 —— 此前 tsconfig 只含 src，vitest 剥类型不查，测试里的类型错误静默放行
+- 「没有任何块完成」的提示补齐调参旋钮：块耗时超单次超时应调 `J_SEE_TIMEOUT_MS`（此前文案只提总预算与客户端超时，指向了错误的旋钮）
+- 注记（不改动）：`ocrWithBudget` 任一块超时即停发新块是保守策略 —— 单块异常慢通常意味着上游整体变慢，继续发块大概率白烧调用费；未处理块在输出中如实列出
+
 ### Fixed（第三轮评审修复）
 
 两个实测复现的功能缺陷：
@@ -62,7 +93,7 @@
 - **image_diff 处理透明度**：双方全透明的像素视为相同（RGB 是未定义值），透明度变化直接计为差异
 - **语义如实披露**：`image_diff` 返回的是 12×12 网格块而非精确包围盒；`colors` 的 5 位分桶不适合渐变/照片。措辞与工具描述同步更正
 - **消除重复真值来源**：来源判定收敛为 `classifySource`（原 `readSource` 与 `pixels.ts` 各一份，会随新增来源漂移）；`writeOutput`/`deriveDefaultOutput`/`encodeForOutput` 提取到 `tools/output.ts`（原在两文件逐字重复）；region 格式统一由 `REGION_PATTERN` 定义
-- **ocr_long 性能与边界**：去掉每块一次的全图 `clone`（改为只分配块大小的 `new Jimp({data,width,height})`，省下每块数十 MB 的 memcpy；注：修的是分配流量与 GC 压力，内存峰值本就是 ~2× 而非 N×）；并发 4 块；超过 16 块在切块前 fail fast 并提示先 `crop` 分段
+- **ocr_long 性能与边界**：去掉每块一次的全图 `clone`（改为 `Jimp.fromBitmap` 只分配块大小的 buffer，省下每块数十 MB 的 memcpy；注：修的是分配流量与 GC 压力，内存峰值本就是 ~2× 而非 N×）；并发 4 块；超过 16 块在切块前 fail fast 并提示先 `crop` 分段
 - **trace 类型断言收敛**：原 `as unknown as Uint8ClampedArray` 是谎报（Buffer 不是 Uint8ClampedArray），现用零拷贝视图构造真正的 `Uint8ClampedArray`，只保留一处不可避免的断言（Node lib 无 DOM `ImageData`）
 - **新增 registry 测试**：工具名唯一性、`required` 字段声明完整性、`needsVision` 标记正确性，以及「本地工具在零视觉配置下全部可用且不触网」——这是原先完全没有防线的一处
 

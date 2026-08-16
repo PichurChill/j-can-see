@@ -30,9 +30,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "npm run typecheck && vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run typecheck"
   },
   "dependencies": {
     "@image-tracer-ts/core": "^1.0.2",

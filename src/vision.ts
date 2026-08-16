@@ -13,7 +13,7 @@
  * 2. 超时短于 CF Tunnel 的 100s 上限，让客户端先于 524 给出清晰错误
  * 3. 不重试、不降级 —— 失败原样上报，调用方据 status 决策
  */
-import { VisionError } from "./errors.js";
+import { VisionError, VisionTimeoutError } from "./errors.js";
 import type { AppConfig } from "./config.js";
 import { VERSION } from "./version.js";
 
@@ -275,14 +275,33 @@ export async function callVision(
   input: VisionInput,
   config: AppConfig,
   fetchImpl: FetchLike = fetch,
+  /**
+   * 单次调用超时覆盖（毫秒）。省略用 J_SEE_TIMEOUT_MS。
+   * ocr_long 用它把每块的超时压到「总预算的剩余时间」，
+   * 保证整体不撞客户端的工具级超时（如 100s）。
+   */
+  timeoutMs?: number,
+  /**
+   * 外部取消信号（如 ocr_long 某块真实失败时取消全部在途调用）。
+   * 触发后与超时同型处理 —— 上层已记录真实错误，这里的结果不会被使用。
+   */
+  signal?: AbortSignal,
 ): Promise<string> {
   const req = buildRequest(input, config);
 
   const controller = new AbortController();
+  const effectiveTimeout = timeoutMs ?? config.J_SEE_TIMEOUT_MS;
   const timer = setTimeout(
     () => controller.abort(),
-    config.J_SEE_TIMEOUT_MS,
+    effectiveTimeout,
   );
+  const onExternalAbort = () => controller.abort();
+  if (signal?.aborted) {
+    // 传入时已取消（如调用前恰有并行块失败）：监听器不会再触发，必须显式同步
+    controller.abort();
+  } else {
+    signal?.addEventListener("abort", onExternalAbort);
+  }
 
   let resp: Response;
   try {
@@ -294,13 +313,14 @@ export async function callVision(
     });
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
-      throw new VisionError(`视觉调用超时（${config.J_SEE_TIMEOUT_MS}ms）`);
+      throw new VisionTimeoutError(`视觉调用超时（${effectiveTimeout}ms）`);
     }
     throw new VisionError(
       `视觉调用网络错误：${e instanceof Error ? e.message : String(e)}`,
     );
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onExternalAbort);
   }
 
   if (!resp.ok) {

@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { Jimp } from "jimp";
 import type { AppConfig } from "../config.js";
-import { ImageError } from "../errors.js";
+import { ImageError, VisionTimeoutError } from "../errors.js";
 import { readSource } from "../sources/index.js";
 import {
   decodeJimp,
@@ -47,6 +47,12 @@ const OCR_CONCURRENCY = 4;
 
 /** 块数上限：超出则在切块前就 fail fast，而不是跑到一半让客户端超时 */
 const OCR_MAX_CHUNKS = 16;
+
+/**
+ * 剩余预算低于此值时不再发起新块 —— 此时的调用几乎必然超时，
+ * 发出去只是白烧一次调用费。
+ */
+const MIN_CHUNK_BUDGET_MS = 10_000;
 
 function ocrPrompt(extra?: string): string {
   const base =
@@ -133,25 +139,129 @@ function sliceBlock(image: DecodedImage, chunk: Chunk): DecodedImage {
 }
 
 /**
- * 并发映射，保序返回。
- * 任一项失败立即向上抛 —— 不吞错、不用部分结果拼出「看起来完整」的输出。
+ * 预算内的并发 OCR：worker 从共享队列取块，块调用超时压到剩余预算。
+ *
+ * 两种停止方式，语义不同：
+ *  - 预算耗尽：不算错误 —— 已完成的块构成部分结果，
+ *    未处理的块在输出里如实列出（含 y 区间）供调用方补齐
+ *  - 真实错误（网络/上游拒绝）：fail fast —— 第一个错误直接上抛，
+ *    并通过共享 AbortSignal **立即取消所有在途调用**（否则要等它们各自跑满
+ *    超时才见错误，最坏数倍于单次超时）
  */
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
+export async function ocrWithBudget(
+  chunks: readonly Chunk[],
+  concurrency: number,
+  budgetMs: number,
+  perCallMs: number,
+  run: (index: number, timeoutMs: number, signal: AbortSignal) => Promise<string>,
+  /** 剩余预算低于此值不再发起新块；参数化供测试注入小值 */
+  minStartBudgetMs = MIN_CHUNK_BUDGET_MS,
+): Promise<{ results: Map<number, string>; error?: unknown }> {
+  const deadline = Date.now() + budgetMs;
+  const remaining = () => deadline - Date.now();
+  const results = new Map<number, string>();
+  const errorStop = new AbortController();
   let next = 0;
+  let stopped = false;
+  let error: unknown;
+
   const worker = async (): Promise<void> => {
-    for (let i = next++; i < items.length; i = next++) {
-      results[i] = await fn(items[i], i);
+    for (;;) {
+      const i = next++;
+      if (stopped || i >= chunks.length) return;
+      const left = remaining();
+      if (left <= minStartBudgetMs) {
+        stopped = true; // 预算耗尽：停，不报错（在途调用有自己的超时上限）
+        return;
+      }
+      try {
+        results.set(
+          i,
+          await run(i, Math.min(perCallMs, remaining()), errorStop.signal),
+        );
+      } catch (e) {
+        stopped = true;
+        // 分类看类型而非发生时刻/文案：超时（无论预算是否耗尽）= 该块未完成，
+        // 不算故障；其余（网络/上游拒绝等）哪怕恰在 deadline 之后到达也照常上报
+        if (e instanceof VisionTimeoutError) {
+          return; // 该块记为未处理
+        }
+        errorStop.abort(); // 真实故障：取消其他在途调用，让 fail fast 真正快
+        error ??= e;
+        return;
+      }
     }
   };
+
   await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, worker),
+    Array.from({ length: Math.min(concurrency, chunks.length) }, worker),
   );
-  return results;
+  return { results, error };
+}
+
+export interface AssembleResult {
+  readonly text: string;
+  readonly boundaries: readonly Boundary[];
+}
+
+/**
+ * 把各块的 OCR 结果按块序拼装成正文。
+ *
+ * 契约（部分返回设计成立的前提）：**「有缺口标记 ⇔ 真的缺了块」** ——
+ * 全部完成时不得出现任何标记；第一块完成时不产生标记；缺口（开头/中间/尾部）
+ * 必须给出准确的块号与 y 区间。相邻完成块之间走去重合并并产生边界记录。
+ *
+ * 导出供单测直接覆盖。
+ */
+export function assembleChunks(
+  chunks: readonly Chunk[],
+  results: ReadonlyMap<number, string>,
+): AssembleResult {
+  const order = chunks.map((_, i) => i).filter((i) => results.has(i));
+  if (order.length === 0) return { text: "", boundaries: [] };
+
+  let merged = "";
+  const boundaries: Boundary[] = [];
+  let prev = -1;
+  for (const i of order) {
+    const piece = results.get(i)!;
+    if (prev >= 0 && prev === i - 1) {
+      // 相邻完成块：走去重合并（重叠区只存在于相邻块之间）
+      const r = mergeTwo(merged, piece);
+      merged = r.text;
+      boundaries.push({
+        index: i,
+        removed: r.removed,
+        overlapFrom: chunks[i].y,
+        overlapTo: chunks[i - 1].yEnd,
+      });
+    } else {
+      const from = prev + 1;
+      const gapChunks = chunks.slice(from, i);
+      const parts: string[] = [];
+      if (merged) parts.push(merged);
+      if (gapChunks.length > 0) {
+        const gap = gapChunks
+          .map((c, k) => `第 ${from + k + 1} 块（y ${c.y}–${c.yEnd}）`)
+          .join("、");
+        parts.push(`⋯⋯［${gap} 未完成，内容缺失］⋯⋯`);
+      }
+      parts.push(piece);
+      merged = parts.join("\n");
+    }
+    prev = i;
+  }
+
+  // 尾部缺口
+  const tailStart = order[order.length - 1] + 1;
+  if (tailStart < chunks.length) {
+    const tail = chunks
+      .slice(tailStart)
+      .map((c, k) => `第 ${tailStart + k + 1} 块（y ${c.y}–${c.yEnd}）`)
+      .join("、");
+    merged += `\n⋯⋯［${tail} 未完成，内容缺失］⋯⋯`;
+  }
+  return { text: merged, boundaries };
 }
 
 interface Boundary {
@@ -211,6 +321,8 @@ export const OCR_LONG_TOOL: VisionToolEntry<OcrLongArgs> = {
       "对长截图 / 长页面 / 长聊天记录做分块 OCR 并合并（调视觉模型）。" +
       "自动按高度切块 + 重叠区防丢字，比一次性 OCR 超长图更可靠。" +
       "保留发言人/时间戳/引用等结构，输出纯文本。" +
+      "多块时受总时间预算（J_SEE_OCR_TOTAL_TIMEOUT_MS，默认 85s）约束：" +
+      "预算耗尽返回已完成部分并列出未处理块的 y 区间（可用 crop 裁出后单独补齐），不会整单失败。" +
       "多块时附每条边界的去重审计（含未能去重的边界与可复核坐标）。" +
       "短图（不超高）自动退化为单次 OCR。",
     inputSchema: {
@@ -247,43 +359,76 @@ export const OCR_LONG_TOOL: VisionToolEntry<OcrLongArgs> = {
       );
     }
 
-    const ocrBlock = (img: ProcessedImage): Promise<string> =>
+    const ocrBlock = (
+      img: ProcessedImage,
+      timeoutMs: number,
+      signal?: AbortSignal,
+    ): Promise<string> =>
       callVision(
         { images: [img], prompt, maxTokens: OCR_MAX_TOKENS },
         config,
         deps.fetchImpl,
+        timeoutMs,
+        signal,
       );
 
-    // 短图：单次 OCR（无需分块，也就没有边界与去重）
+    // 短图：单次 OCR（无需分块，也就没有边界与去重；单次超时受 J_SEE_TIMEOUT_MS 约束）
     if (chunks.length === 1) {
-      return ocrBlock(await encodeProcessed(image, maxEdge));
+      return ocrBlock(
+        await encodeProcessed(image, maxEdge),
+        config.J_SEE_TIMEOUT_MS,
+      );
     }
 
-    const pieces = await mapWithConcurrency(
+    const { results, error } = await ocrWithBudget(
       chunks,
       OCR_CONCURRENCY,
-      async (chunk) =>
-        ocrBlock(await encodeProcessed(sliceBlock(image, chunk), maxEdge)),
+      config.J_SEE_OCR_TOTAL_TIMEOUT_MS,
+      config.J_SEE_TIMEOUT_MS,
+      async (i, timeoutMs, signal) =>
+        ocrBlock(
+          await encodeProcessed(sliceBlock(image, chunks[i]), maxEdge),
+          timeoutMs,
+          signal,
+        ),
     );
+    if (error) throw error;
 
-    // 合并并记录每条边界的处理结果
-    let merged = pieces[0];
-    const boundaries: Boundary[] = [];
-    for (let i = 1; i < pieces.length; i++) {
-      const r = mergeTwo(merged, pieces[i]);
-      merged = r.text;
-      boundaries.push({
-        index: i,
-        removed: r.removed,
-        overlapFrom: chunks[i].y,
-        overlapTo: chunks[i - 1].yEnd,
-      });
+    const missing = chunks
+      .map((_, i) => i)
+      .filter((i) => !results.has(i));
+    if (missing.length === chunks.length) {
+      // 一块都没完成：预算内颗粒无收，给出可操作的补齐指引
+      const ranges = missing
+        .map((i) => `第 ${i + 1} 块（y ${chunks[i].y}–${chunks[i].yEnd}）`)
+        .join("、");
+      return (
+        `（分 ${chunks.length} 块 OCR：总预算 ${config.J_SEE_OCR_TOTAL_TIMEOUT_MS}ms 内没有任何块完成，` +
+        `未处理：${ranges}。可按情况调整：块本身耗时长于单次超时（${config.J_SEE_TIMEOUT_MS}ms）` +
+        `时调大 J_SEE_TIMEOUT_MS；要一口气处理更多块时调大 J_SEE_OCR_TOTAL_TIMEOUT_MS ` +
+        `或客户端 MCP 工具超时；图特别长时用 crop 逐段裁出后单独 ocr_long）`
+      );
     }
 
+    // 按块序拼装：相邻(索引连续)的完成块走去重合并；缺口处插入显式标记。
+    // 拼装逻辑抽为纯函数 assembleChunks，缺口标记的准确性有独立测试锁定
+    const { text: merged, boundaries } = assembleChunks(chunks, results);
+
     const failed = boundaries.filter((b) => !b.removed).length;
-    const header =
-      `（分 ${pieces.length} 块 OCR，${boundaries.length} 条边界` +
-      (failed > 0 ? `，其中 ${failed} 条未能自动去重）` : `，均已去重）`);
+    let header: string;
+    if (missing.length === 0) {
+      header =
+        `（分 ${chunks.length} 块 OCR，${boundaries.length} 条边界` +
+        (failed > 0 ? `，其中 ${failed} 条未能自动去重）` : `，均已去重）`);
+    } else {
+      const ranges = missing
+        .map((i) => `第 ${i + 1} 块（y ${chunks[i].y}–${chunks[i].yEnd}）`)
+        .join("、");
+      header =
+        `（分 ${chunks.length} 块 OCR：${results.size} 块完成；总预算 ` +
+        `${config.J_SEE_OCR_TOTAL_TIMEOUT_MS}ms 耗尽，${missing.length} 块未处理 —— ` +
+        `${ranges}。可用 crop 裁出上述 y 区间后单独 ocr_long 补齐）`;
+    }
     return `${header}\n${merged}${buildAudit(boundaries, overlap)}`;
   },
 };

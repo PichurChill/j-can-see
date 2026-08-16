@@ -58,11 +58,26 @@ claude mcp add j-can-see -s user \
 | `J_SEE_MAX_EDGE` | 否 | `1568` | 图片压缩长边像素上限 |
 | `J_SEE_MAX_BYTES` | 否 | `52428800` | 源文件体积上限（字节），超出拒绝 |
 | `J_SEE_MAX_PIXELS` | 否 | `40000000` | 解码后像素数上限（宽×高），**在解码前**从图片 header 读尺寸判定。`J_SEE_MAX_BYTES` 管的是*压缩后*体积——大面积纯色 PNG 可以只有几 KB 却解出巨大 bitmap |
-| `J_SEE_TIMEOUT_MS` | 否 | `90000` | 视觉调用超时（毫秒） |
+| `J_SEE_TIMEOUT_MS` | 否 | `90000` | 单次视觉调用超时（毫秒） |
+| `J_SEE_OCR_TOTAL_TIMEOUT_MS` | 否 | `85000` | `ocr_long` 多块总时间预算（毫秒）。预算耗尽**不报错**：返回已完成的块并列出未处理块的 y 区间。默认 85s，刻意低于常见客户端的 MCP 工具级超时（如 ZCode 的 100s） |
 
 缺 `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL` **不影响 server 启动**：本地像素工具照常可用（stderr 留一条提示），视觉工具在被调用时返回清晰的配置错误。任何变量填了非法值仍然 fail fast。
 
 > `J_SEE_MODEL` 无默认值：填你的代理实际支持的视觉模型名。实测 `grok-4.5` 在同等识图质量下 token 消耗较低，可作为参考选择。
+
+### 超时机制（三层）
+
+| 层 | 默认 | 行为 |
+|---|---|---|
+| 单次视觉调用 | `J_SEE_TIMEOUT_MS` = 90s | 超时主动掐断，报「视觉调用超时」 |
+| `ocr_long` 总预算 | `J_SEE_OCR_TOTAL_TIMEOUT_MS` = 85s | 耗尽返回部分结果 + 未处理块 y 区间（不整单失败） |
+| 客户端 MCP 工具超时 | 如 ZCode 100s | 客户端硬墙——总预算默认值刻意留了余量 |
+
+如果你的客户端工具超时较短（或想一次吃下更长的图），调大客户端超时或调大 `J_SEE_OCR_TOTAL_TIMEOUT_MS`；图特别长（>2 万 px）时更稳的做法是先 `crop` 分段、逐段 `ocr_long`。
+
+### 模型选型（locate / inspect 依赖定位能力）
+
+`locate`/`inspect` 需要模型输出精确边界框（grounding），不同模型差距很大：实测 `grok-4.5/4.6` 识图描述可用但定位偏弱（可能频繁 NOT_FOUND）；坐标定位任务建议配 grounding 更强的模型（Gemini、Qwen-VL 系列等）。`J_SEE_MODEL` 是全局的——如果你的代理支持多模型，可以为定位任务单独配一个 server 实例。
 
 ### API 规范（`J_SEE_API_SPEC`）
 

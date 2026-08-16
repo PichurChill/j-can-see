@@ -13,6 +13,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, loadBaseConfig } from "./config.js";
+import { sweepStaleClipboardTemp } from "./sources/clipboard.js";
 import { listTools, getTool } from "./tools/registry.js";
 import { VERSION } from "./version.js";
 import { readFileSync } from "node:fs";
@@ -41,8 +42,11 @@ if (argv.includes("--hook") || argv.includes("--print-hook")) {
 }
 
 function main(): void {
+  // 清扫上次进程被强杀时可能残留的剪贴板中转文件（仅自身命名空间，best-effort）
+  void sweepStaleClipboardTemp();
+
   // 视觉配置懒校验：缺 J_SEE_* 时 server 仍启动（本地工具可用），
-  // 仅在 stderr 留警告；视觉工具调用时才做完整校验并返回 ConfigError
+  // 仅在 stderr 留警告；视觉工具调用时才完整校验并返回 ConfigError
   try {
     loadConfig();
   } catch (e) {

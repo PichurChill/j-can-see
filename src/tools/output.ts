@@ -3,21 +3,23 @@
  * crop / extract_fg / trace 共用（原先 writeOutput 在 pixels 与 vectorize 中逐字重复）。
  */
 import fs from "node:fs/promises";
+import { dirname } from "node:path";
 import { ImageError } from "../errors.js";
 import type { DecodedImage } from "../image.js";
 import { expandPath } from "../sources/file.js";
 import { classifySource } from "../sources/index.js";
 
-/** 写输出文件；目录不存在等 fs 错误包装为可读的 ImageError */
+/** 写输出文件；输出目录不存在时自动创建（AI 常直接写新路径）。失败包装为可读的 ImageError */
 export async function writeOutput(
   path: string,
   data: Buffer | string,
 ): Promise<void> {
   try {
+    await fs.mkdir(dirname(path), { recursive: true });
     await fs.writeFile(path, data);
   } catch (e) {
     throw new ImageError(
-      `写入输出文件失败（目录不存在或无权限）：${path}：${
+      `写入输出文件失败（目录无法创建或无权限）：${path}：${
         e instanceof Error ? e.message : String(e)
       }`,
     );

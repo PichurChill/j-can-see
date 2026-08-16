@@ -33,13 +33,16 @@ describe("LOCATE_TOOL", () => {
     expect(text).toContain("x1: 100, y1: 200, x2: 150, y2: 230");
   });
 
-  it("NOT_FOUND 返回未找到", async () => {
+  it("NOT_FOUND 返回未找到，并附可操作建议（crop 分段 / inspect 枚举）", async () => {
     const text = await runVision(
       LOCATE_TOOL,
       { source: "x.png", target: "按钮" },
       { reader: readerOf(await png80()), fetchImpl: mockFetch("NOT_FOUND") },
     );
     expect(text).toContain("未找到");
+    expect(text).toContain("crop");
+    expect(text).toContain("inspect");
+    expect(text).toContain("1568"); // 提示压缩上限，解释长图上找不到的原因
   });
 
   it("越界坐标 clamp 到图片边界，输出可直接回喂 region", async () => {

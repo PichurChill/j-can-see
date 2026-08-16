@@ -105,20 +105,17 @@ describe("CROP_TOOL", () => {
     }
   });
 
-  it("output 指向不存在目录时报可读错误（含路径）", async () => {
+  it("output 指向不存在的嵌套目录时自动创建并写入成功", async () => {
     const src = path.join(tmpDir, "src3.png");
     const png = await makePng(20, 20);
-    await expect(
-      runLocal(
-        CROP_TOOL,
-        {
-          source: src,
-          region: "0,0,10,10",
-          output: path.join(tmpDir, "no-such-dir", "x.png"),
-        },
-        { reader: readerFrom({ [src]: png }) },
-      ),
-    ).rejects.toThrow(/写入输出文件失败/);
+    const out = path.join(tmpDir, "no-such-dir", "nested", "x.png");
+    const text = await runLocal(
+      CROP_TOOL,
+      { source: src, region: "0,0,10,10", output: out },
+      { reader: readerFrom({ [src]: png }) },
+    );
+    expect(text).toContain(out);
+    await expect(fs.access(out)).resolves.toBeUndefined();
   });
 
   it("scale 放大裁剪结果", async () => {

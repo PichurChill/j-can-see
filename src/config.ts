@@ -74,6 +74,15 @@ const baseEnvSchema = z.object({
   // 视觉调用超时（毫秒）。需短于 CF Tunnel 的 100s 上限，
   // 让客户端先于 524 给出清晰错误
   J_SEE_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
+
+  // ocr_long 的总时间预算（毫秒），默认 85s —— 低于常见客户端的
+  // MCP 工具级超时（如 ZCode 100s）。多块 OCR 的总时长若无上限，
+  // 会被客户端整单掐断、颗粒无收；预算耗尽时返回已完成的部分结果。
+  J_SEE_OCR_TOTAL_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(85_000),
 });
 
 const envSchema = visionEnvSchema.merge(baseEnvSchema);

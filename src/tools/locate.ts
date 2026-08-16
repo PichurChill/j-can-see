@@ -74,7 +74,12 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
     );
 
     if (/NOT_FOUND/i.test(text.trim())) {
-      return `未找到目标「${args.target}」。`;
+      return (
+        `未找到目标「${args.target}」。可尝试：` +
+        `① 长图/高图会被等比压缩（长边上限 ${config.J_SEE_MAX_EDGE}px），` +
+        `小目标可能因此不可辨 —— 先用 crop 裁出大致区域，在局部图上重新 locate；` +
+        `② 改用 inspect 枚举全部元素后自行挑选。`
+      );
     }
 
     // 按行提取坐标框：模型返回多个匹配时全部列出（静默取首个会误导 GUI 自动化）

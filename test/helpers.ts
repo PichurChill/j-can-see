@@ -24,6 +24,7 @@ export const TEST_BASE_CONFIG: BaseConfig = {
   J_SEE_MAX_BYTES: 50 * 1024 * 1024,
   J_SEE_MAX_PIXELS: 40_000_000,
   J_SEE_TIMEOUT_MS: 90000,
+  J_SEE_OCR_TOTAL_TIMEOUT_MS: 85_000,
 };
 
 /** 视觉工具用配置 */

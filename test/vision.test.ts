@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { callVision, type FetchLike } from "../src/vision.js";
+import { VisionTimeoutError } from "../src/errors.js";
 import type { AppConfig } from "../src/config.js";
 import { TEST_CONFIG } from "./helpers.js";
 
@@ -358,5 +359,93 @@ describe("callVision", () => {
       body = JSON.parse(noLimit.calls[0][1].body as string);
       expect(body.max_output_tokens).toBeUndefined();
     });
+  });
+
+  it("timeoutMs 覆盖单次超时：短超时快速中断并体现在错误信息", async () => {
+    // 模拟尊重 abort signal 的慢上游（300ms），覆盖 30ms → 主动掐断
+    const slow: FetchLike = async (_url: string, init: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 300);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "x" } }] }), {
+        status: 200,
+      });
+    };
+    await expect(callVision(INPUT, config, slow, 30)).rejects.toThrow(
+      /视觉调用超时（30ms）/,
+    );
+    await expect(callVision(INPUT, config, slow, 30)).rejects.toBeInstanceOf(
+      VisionTimeoutError,
+    );
+  });
+
+  it("传入时已 aborted 的 signal 立即生效（addEventListener 不会补发事件）", async () => {
+    // 模拟：并行块失败发生在本块 encodeProcessed 期间，signal 已是 aborted 状态
+    let fetchCalled = false;
+    const slow: FetchLike = async (_url: string, init: RequestInit) => {
+      fetchCalled = true;
+      if (init.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 5000);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+      return new Response("{}", { status: 200 });
+    };
+    const external = new AbortController();
+    external.abort(); // 调用前就已取消
+    const t0 = Date.now();
+    await expect(
+      callVision(INPUT, config, slow, 60_000, external.signal),
+    ).rejects.toMatchObject({ name: "VisionTimeoutError" });
+    expect(Date.now() - t0).toBeLessThan(100); // 未等任何超时
+    // 契约：实现仍会带着 aborted signal 调 fetch（不跳过调用），
+    // 快速退出依赖 fetch 规范对 aborted signal 的立即拒绝
+    expect(fetchCalled).toBe(true);
+  });
+
+  it("外部 signal 触发时立即中断在途调用（与超时同型报错）", async () => {
+    const slow: FetchLike = async (_url: string, init: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 5000); // 远超测试时长，只能被 signal 掐断
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+      return new Response("{}", { status: 200 });
+    };
+    const external = new AbortController();
+    setTimeout(() => external.abort(), 20);
+    const t0 = Date.now();
+    await expect(
+      callVision(INPUT, config, slow, 60_000, external.signal),
+    ).rejects.toThrow(/视觉调用超时/);
+    expect(Date.now() - t0).toBeLessThan(300); // 20ms 触发，而非等 60s 超时
+  });
+
+  it("timeoutMs 省略时用 config 的 J_SEE_TIMEOUT_MS（真实走默认超时路径）", async () => {
+    // 慢上游尊重 abort signal；单次超时调小到 40ms，不传 timeoutMs → 用配置值掐断
+    const slow: FetchLike = async (_url: string, init: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 300);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+      return new Response("{}", { status: 200 });
+    };
+    await expect(
+      callVision(INPUT, { ...config, J_SEE_TIMEOUT_MS: 40 }, slow),
+    ).rejects.toThrow(/视觉调用超时（40ms）/);
   });
 });

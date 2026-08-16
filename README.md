@@ -58,11 +58,26 @@ Add this to the `mcpServers` section of `~/.claude.json`:
 | `J_SEE_MAX_EDGE` | No | `1568` | Max long-edge pixels for image compression |
 | `J_SEE_MAX_BYTES` | No | `52428800` | Max source file size in bytes; larger is rejected |
 | `J_SEE_MAX_PIXELS` | No | `40000000` | Max decoded pixels (w×h), checked from the image header **before** decoding. `J_SEE_MAX_BYTES` only caps *compressed* size — a mostly-solid PNG can be a few KB yet decode to a multi-GB bitmap |
-| `J_SEE_TIMEOUT_MS` | No | `90000` | Vision call timeout in milliseconds |
+| `J_SEE_TIMEOUT_MS` | No | `90000` | Timeout per vision call (ms) |
+| `J_SEE_OCR_TOTAL_TIMEOUT_MS` | No | `85000` | Total time budget for multi-chunk `ocr_long` (ms). When exhausted it **does not fail**: returns completed chunks plus the y-ranges of unprocessed ones. Default 85s stays under common client-side MCP tool timeouts (e.g. ZCode's 100s) |
 
 Missing `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL` does **not** stop the server: local pixel tools keep working (a warning goes to stderr) and vision tools return a clear config error when called. Malformed values in any variable still fail fast.
 
 > `J_SEE_MODEL` has no default: use the vision model your endpoint actually supports. In testing, `grok-4.5` used fewer tokens than other candidates at equal description quality.
+
+### Timeouts (three layers)
+
+| Layer | Default | Behavior |
+|---|---|---|
+| Per vision call | `J_SEE_TIMEOUT_MS` = 90s | Aborts actively, reports a clear timeout error |
+| `ocr_long` total budget | `J_SEE_OCR_TOTAL_TIMEOUT_MS` = 85s | Returns partial results + y-ranges of unprocessed chunks (never fails wholesale) |
+| Client MCP tool timeout | e.g. ZCode 100s | Hard wall — the default budget deliberately leaves headroom |
+
+If your client's tool timeout is shorter (or you want to swallow longer images in one go), raise the client timeout or `J_SEE_OCR_TOTAL_TIMEOUT_MS`. For very tall images (>20k px), pre-splitting with `crop` and running `ocr_long` per segment is more reliable.
+
+### Model choice (locate / inspect depend on grounding)
+
+`locate`/`inspect` require the model to emit precise bounding boxes (grounding), which varies a lot between models: in testing `grok-4.5/4.6` describe images fine but ground weakly (frequent NOT_FOUND). For coordinate work prefer models with stronger grounding (Gemini, Qwen-VL, etc.). `J_SEE_MODEL` is global — if your proxy serves multiple models, register a second server instance for locating tasks.
 
 ### API specs (`J_SEE_API_SPEC`)
 

@@ -39,3 +39,15 @@ export class VisionError extends Error {
     this.status = status;
   }
 }
+
+/**
+ * 视觉调用超时（含被外部 signal 取消）。
+ * 子类存在的意义：ocr_long 靠 instanceof 把「超时 = 该块未完成」与
+ * 「其他错误 = 真实故障 fail fast」区分开 —— 文案可以随意改，类型契约不会断。
+ */
+export class VisionTimeoutError extends VisionError {
+  constructor(message: string) {
+    super(message);
+    this.name = "VisionTimeoutError";
+  }
+}

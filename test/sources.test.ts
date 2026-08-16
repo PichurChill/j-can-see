@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readSource, type SourceReader } from "../src/sources/index.js";
+import { sweepStaleClipboardTemp } from "../src/sources/clipboard.js";
 
 interface FakeReader extends SourceReader {
   calls: string[];
@@ -65,5 +66,32 @@ describe("readSource 来源判定", () => {
     const r = fakeReader();
     await readSource("HTTPS://x.com/a.png", r);
     expect(r.calls).toEqual(["url:HTTPS://x.com/a.png"]);
+  });
+});
+
+describe("sweepStaleClipboardTemp", () => {
+  it("只清理自身命名空间且足够老的残留；新文件（可能是并行实例在途）与无关文件不碰", async () => {
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const fs = (await import("node:fs/promises"));
+    const dir = os.tmpdir();
+    const stale = path.join(dir, `j-can-see-clip-${crypto.randomUUID()}.png`);
+    const fresh = path.join(dir, `j-can-see-clip-${crypto.randomUUID()}.png`);
+    const other = path.join(dir, `j-can-see-sweep-other-${Date.now()}.png`);
+    await fs.writeFile(stale, "x");
+    await fs.writeFile(fresh, "x");
+    await fs.writeFile(other, "x");
+    // stale 的 mtime 拨回 1 小时前，fresh 保持当前时间
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    await fs.utimes(stale, old, old);
+    try {
+      const n = await sweepStaleClipboardTemp();
+      await expect(fs.access(stale)).rejects.toThrow(); // 老残留被清
+      await expect(fs.access(fresh)).resolves.toBeUndefined(); // 新文件保留
+      await expect(fs.access(other)).resolves.toBeUndefined(); // 无关文件保留
+      expect(n).toBeGreaterThanOrEqual(1);
+    } finally {
+      await Promise.all([fs.unlink(fresh).catch(() => {}), fs.unlink(other).catch(() => {})]);
+    }
   });
 });

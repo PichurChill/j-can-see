@@ -19,6 +19,42 @@ export function isClipboardSupported(): boolean {
   return process.platform === "darwin" || process.platform === "win32";
 }
 
+/** 只清理超过此时长的中转文件：并行的另一个实例可能正处于「写入→读取」窗口 */
+const SWEEP_MIN_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * 清扫 os.tmpdir() 下本工具遗留的剪贴板中转文件（j-can-see-clip-*.png）。
+ *
+ * 正常路径由 readClipboard 的 finally 删除；仅进程被强杀（kill -9）时残留。
+ * 只碰自己命名空间（唯一前缀）且修改时间超过 SWEEP_MIN_AGE_MS 的文件 ——
+ * 刚产生的可能是并行实例的在途文件，不能删。best-effort、静默失败。
+ */
+export async function sweepStaleClipboardTemp(): Promise<number> {
+  try {
+    const dir = os.tmpdir();
+    const names = (await fs.readdir(dir)).filter((n) =>
+      /^j-can-see-clip-[0-9a-f-]+\.png$/.test(n),
+    );
+    let deleted = 0;
+    await Promise.all(
+      names.map(async (n) => {
+        const fp = path.join(dir, n);
+        try {
+          const st = await fs.stat(fp);
+          if (Date.now() - st.mtimeMs < SWEEP_MIN_AGE_MS) return;
+          await fs.unlink(fp);
+          deleted++;
+        } catch {
+          // 文件消失/权限问题：跳过
+        }
+      }),
+    );
+    return deleted;
+  } catch {
+    return 0;
+  }
+}
+
 export async function readClipboard(): Promise<Buffer> {
   const platform = process.platform;
   if (platform !== "darwin" && platform !== "win32") {
