@@ -9,6 +9,18 @@ import type { DecodedImage } from "../image.js";
 import { expandPath } from "../sources/file.js";
 import { classifySource } from "../sources/index.js";
 
+/**
+ * 落盘约定（写文件工具 output 参数描述共用）—— SKILL.md「通用规则」的单行版。
+ * MCP tools/list 的 description 是唯一保证进模型上下文的文本：skill 未安装/未触发时
+ * AI 看不到 SKILL.md，会自选 /tmp 临时目录且无人清理，所以约定必须在这里再落一份。
+ */
+export const OUTPUT_PATH_CONVENTION =
+  "落盘约定：用完即弃的中间产物放当前项目 .j-can-see/<任务名>/ 子目录" +
+  "（首次创建时把 .j-can-see/ 加入项目 .gitignore，任务结束删除）；" +
+  "不在项目内时放系统临时目录的 j-can-see/<任务名>/" +
+  "（macOS/Linux：/tmp/j-can-see/<任务名>/；Windows：%TEMP%\\j-can-see\\<任务名>\\）；" +
+  "需长期保留的素材才写项目正式路径（如 assets/）";
+
 /** 写输出文件；输出目录不存在时自动创建（AI 常直接写新路径）。失败包装为可读的 ImageError */
 export async function writeOutput(
   path: string,

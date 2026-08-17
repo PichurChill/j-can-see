@@ -14,10 +14,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, loadBaseConfig } from "./config.js";
 import { sweepStaleClipboardTemp } from "./sources/clipboard.js";
+import { bundledSkillPath, installSkillBestEffort, skillInstallDirs } from "./skill.js";
 import { listTools, getTool } from "./tools/registry.js";
 import { VERSION } from "./version.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 // 辅助命令：导出 Claude Code PreToolUse hook 脚本，便于一行安装：
@@ -41,9 +43,52 @@ if (argv.includes("--hook") || argv.includes("--print-hook")) {
   process.exit(0);
 }
 
+// 辅助命令：手动安装/更新 Agent Skill。正常情况下无需执行——server 启动时
+// 会自动 best-effort 安装（见 main()），这里提供显式入口：
+//   npx j-can-see --skill        # 复制到各客户端 skills 目录（已存在则覆盖为当前版本）
+//   npx j-can-see --print-skill  # 打印 SKILL.md 内容，自行放置
+if (argv.includes("--print-skill")) {
+  const skillPath = bundledSkillPath();
+  if (!skillPath) {
+    process.stderr.write("无法定位 SKILL.md，请从仓库获取\n");
+    process.exit(1);
+  }
+  process.stdout.write(readFileSync(skillPath, "utf8"));
+  process.exit(0);
+}
+if (argv.includes("--skill")) {
+  const home = os.homedir();
+  const result = installSkillBestEffort(home);
+  if (!result) {
+    process.stderr.write("无法定位 SKILL.md，请从仓库获取\n");
+    process.exit(1);
+  }
+  if (result.error) process.stderr.write(`部分安装失败：${result.error}\n`);
+  process.stdout.write(
+    `已安装 Agent Skill（重启 agent 客户端后生效）：\n${skillInstallDirs(
+      home,
+    )
+      .map((d) => `  ${path.join(d, "SKILL.md")}`)
+      .join("\n")}\nskill 与 MCP server 相互独立，建议两者都配置。\n`,
+  );
+  process.exit(0);
+}
+
 function main(): void {
   // 清扫上次进程被强杀时可能残留的剪贴板中转文件（仅自身命名空间，best-effort）
   void sweepStaleClipboardTemp();
+
+  // 启动期自动安装 Agent Skill：用户只需配置 MCP，方法论（SKILL.md）随 server 送达。
+  // 内容与已装版本一致则跳过写盘；失败仅提示、不影响 server 启动。
+  // 可用 J_SEE_SKILL_AUTO_INSTALL=0 关闭自动安装。
+  if (process.env.J_SEE_SKILL_AUTO_INSTALL !== "0") {
+    const skillResult = installSkillBestEffort();
+    if (skillResult?.error) {
+      console.error(
+        `[j-can-see] 安装 Agent Skill 失败（可忽略，不影响工具使用）：${skillResult.error}`,
+      );
+    }
+  }
 
   // 视觉配置懒校验：缺 J_SEE_* 时 server 仍启动（本地工具可用），
   // 仅在 stderr 留警告；视觉工具调用时才完整校验并返回 ConfigError

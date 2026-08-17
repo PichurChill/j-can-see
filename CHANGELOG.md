@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.3] - 2026-08-17
+
+### Fixed / Added
+
+- **落盘约定写进工具描述**：crop / extract_fg / trace 的 `output` 参数描述新增共用常量 `OUTPUT_PATH_CONVENTION`——中间产物放项目 `.j-can-see/<任务名>/`（首建入 .gitignore、任务结束清理）；非项目场景放系统临时目录 `j-can-see/<任务名>/`（macOS/Linux `/tmp`，Windows `%TEMP%`）；交付物才写正式路径。动机：MCP `tools/list` 的 description 是唯一保证进模型上下文的文本，skill 未安装时 AI 看不到 SKILL.md 里的约定——实测会话只连 MCP，AI 自选 `/tmp/aviation_design` 散落 8 文件无人清理
+- **SKILL.md 补 frontmatter（name + description，英文）与非项目场景规则**：Agent Skills 规范要求 frontmatter 元数据（缺失则 Claude Code / Codex 无法发现 skill）；非项目场景中间产物统一进系统临时目录的 `j-can-see/<任务名>/`，不再各会话自创目录
+- **skill 随 server 自动安装，用户零操作**：新增 `src/skill.ts`，server 每次启动 best-effort 把 SKILL.md 安装到 `~/.claude/skills`、`~/.codex/skills`、跨工具共享目录 `~/.agents/skills`（Claude/Codex/Cursor/ZCode 等都读）与 ZCode 专属 `~/.zcode/skills`（内容一致跳过写盘，任一目录失败不影响启动，`J_SEE_SKILL_AUTO_INSTALL=0` 可关闭）——用户只需配置 MCP 一次，方法论自动送达；`npx j-can-see --skill` / `--print-skill` 保留为手动安装/查看入口。README（中英）同步说明 MCP（工具）与 skill（方法论）是两条独立通道
+- **README 新增「安装 skill 到其他 AI 工具（手动）」教程**（以 `~/.codex` 为例）：覆盖自动安装三家之外的任意新 AI 工具——通用步骤（建目录 → `--print-skill` 写入 → 重启）、目录名即技能名/frontmatter 说明、skills 目录定位方法与验证，并附「为什么需要 skill」的完整解释（MCP 只保证工具描述进上下文、progressive disclosure、能力与知识分工）
+
 ## [0.5.0] - 2026-08-14
 
 ### Added

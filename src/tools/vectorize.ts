@@ -12,7 +12,7 @@ import { decodeJimp, resolveRegion } from "../image.js";
 import { readSource } from "../sources/index.js";
 import { expandPath } from "../sources/file.js";
 import { createColorClusters, hexToRgb, linearColorDiff, type Rgb } from "./color.js";
-import { writeOutput, deriveDefaultOutput } from "./output.js";
+import { writeOutput, deriveDefaultOutput, OUTPUT_PATH_CONVENTION } from "./output.js";
 import {
   limitsOf,
   regionSchema,
@@ -64,7 +64,9 @@ export const TRACE_TOOL: LocalToolEntry<TraceArgs> = {
         },
         output: {
           type: "string",
-          description: "输出 .svg 文件路径（支持 ~ 展开）。省略则返回 SVG 字符串内容",
+          description:
+            "输出 .svg 文件路径（支持 ~ 展开）。省略则返回 SVG 字符串内容。" +
+            OUTPUT_PATH_CONVENTION,
         },
       },
       required: ["source"],
@@ -149,7 +151,8 @@ export const EXTRACT_FG_TOOL: LocalToolEntry<ExtractFgArgs> = {
         output: {
           type: "string",
           description:
-            "输出 .png 文件路径（支持 ~ 展开）。省略时要求 source 为本地文件路径（同目录生成 _fg.png）；URL/clipboard/latest 必传",
+            "输出 .png 文件路径（支持 ~ 展开）。省略时要求 source 为本地文件路径（同目录生成 _fg.png）；URL/clipboard/latest 必传。" +
+            OUTPUT_PATH_CONVENTION,
         },
       },
       required: ["source"],

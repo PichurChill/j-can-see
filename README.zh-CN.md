@@ -148,8 +148,46 @@ see_image({
 ## CLI 命令
 
 ```bash
-npx j-can-see --hook   # 输出 PreToolUse hook 脚本内容，写入本地磁盘后配合 Claude Code settings 使用
+npx j-can-see --hook         # 输出 PreToolUse hook 脚本内容，写入本地磁盘后配合 Claude Code settings 使用
+npx j-can-see --skill        # 把 SKILL.md 安装为 Agent Skill（~/.claude/skills、~/.agents/skills、~/.codex/skills）
+npx j-can-see --print-skill  # 打印 SKILL.md 内容，自行放置
 ```
+
+> MCP server 只带工具不带文档——工具描述是 MCP 客户端唯一保证注入模型上下文的文本。
+> SKILL.md 里的方法论（含 `.j-can-see/` 落盘约定）走的是独立的 Agent Skills 通道；
+> **server 每次启动会自动安装**（内容一致则跳过写盘，可用 `J_SEE_SKILL_AUTO_INSTALL=0` 关闭），
+> 无需手动操作。下面两个命令仅供手动安装/查看，正常情况下用不到。
+
+## 安装 skill 到其他 AI 工具（手动）
+
+自动安装目前覆盖四个位置：Claude Code 专属 `~/.claude/skills`、Codex 专属 `~/.codex/skills`、
+跨工具共享目录 `~/.agents/skills`（Claude/Codex/Cursor/ZCode 等都会读，放一份多个工具共享）、
+ZCode 专属 `~/.zcode/skills`。
+如果以后使用其他 AI 工具（尤其是非主流客户端），按下面步骤手动安装，以 `~/.codex` 为例：
+
+```bash
+# 1. 创建技能目录：~/.<工具名>/skills/<技能名>/
+mkdir -p ~/.codex/skills/j-can-see
+
+# 2. 把 SKILL.md 写入该目录（--print-skill 输出随包当前版本）
+npx j-can-see --print-skill > ~/.codex/skills/j-can-see/SKILL.md
+# 或直接从仓库复制：cp SKILL.md ~/.codex/skills/j-can-see/
+
+# 3. 重启该 AI 工具，新会话生效
+```
+
+要点：
+
+- **目录名即技能名**：`~/.<工具名>/skills/j-can-see/` 里的 `j-can-see` 不能改；文件必须叫 `SKILL.md`，且以 `---` frontmatter（`name` + `description`）开头——遵循 Agent Skills 规范的工具靠这三样发现技能
+- **不确定某工具的 skills 目录在哪**：查该工具文档中 "skills" / "Agent Skills" 一节。一般约定是用户全局 `~/.<工具名>/skills/<技能名>/SKILL.md`；`~/.agents/skills` 是跨工具共享目录（Claude/Codex/Cursor/ZCode 等都读），放一份即多个工具生效；部分工具还支持项目级 `<项目>/.<工具名>/skills/<技能名>/SKILL.md`（后者可把 SKILL.md 复制进去，仅对该项目生效）
+- **验证**：`ls ~/.codex/skills/j-can-see/` 应能看到 SKILL.md；重启工具后，会话的技能列表里应出现 `j-can-see`，看图任务时自动加载全文
+
+### 为什么需要 skill（而不只靠 MCP）
+
+- **MCP 通道只保证工具描述进模型上下文**：`tools/list` 返回的每个工具只有 name / description / inputSchema，这是所有客户端唯一必然注入的文本。所以最关键的落盘约定写进了 crop / extract_fg / trace 的 `output` 参数描述——这是保底
+- **完整方法论塞不进工具描述**：工具选择决策树、粗到细流程、5 个场景 playbook、边界警告有几百行，塞进去会让每个会话上下文凭空膨胀几千 token
+- **Agent Skills 的渐进披露（progressive disclosure）**：skill 只有一行 frontmatter description 常驻上下文（几十 token），模型判断任务与看图相关时才加载 SKILL.md 全文——知识丰富但上下文开销极小
+- **分工**：MCP 给能力（9 个工具可调用），skill 给知识（怎么用得对）。没有 skill 功能照常可用，但 AI 缺少编排知识——实测会话中 AI 自选 `/tmp` 目录散落文件无人清理、长截图 OCR 整单超时，都是缺方法论的表现
 
 ### `source` 来源
 

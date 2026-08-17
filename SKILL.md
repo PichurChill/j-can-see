@@ -1,3 +1,8 @@
+---
+name: j-can-see
+description: Vision methodology and file-output conventions for the j-can-see MCP server. Use when the model lacks multimodal input or needs precise image work — describing images (see_image), locating UI elements (locate/inspect), OCR on long screenshots (ocr_long), cropping/zooming (crop), exact colors (colors), vectorizing or masking icons (trace/extract_fg), and deciding where generated image files should go (the .j-can-see/ convention).
+---
+
 # j-can-see 视觉工具使用指南
 
 本 MCP server 提供 9 个视觉/像素工具，用于主模型无多模态输入能力时的看图任务。
@@ -98,6 +103,7 @@ inspect（扫整体布局，拿到所有元素的坐标）
 
 - **落盘文件分两类，路径即意图**：
   - **中间产物**（分析用局部图、临时放大等，用完即弃）→ 统一放项目 `.j-can-see/<任务名>/` 子目录；首次创建时顺手把 `.j-can-see/` 加进项目 `.gitignore`；**任务结束删除**不再需要的文件
+  - **不在具体项目内时**（工作目录不是某个项目，如临时任务）→ 中间产物放系统临时目录的 `j-can-see/<任务名>/`（macOS/Linux：`/tmp/j-can-see/<任务名>/`；Windows：`%TEMP%\j-can-see\<任务名>\`），任务结束同样清理；**不要自创新的临时目录**
   - **交付物**（要保留的素材、logo、SVG）→ 显式写到项目正式位置（如 `assets/`）
   - 输出目录不存在会自动创建；相对路径相对 server 工作目录（通常是项目根），不确定时用绝对路径
 - **超长图先分段再 OCR**：高于约两屏（≈3000px）的图，`ocr_long` 受总时间预算（默认 85s）约束，预算耗尽只返回已完成部分。拿到"未处理块 y 区间"提示时，用 `crop` 逐段裁出后单独 `ocr_long` 补齐——单块调用能在客户端超时内完成

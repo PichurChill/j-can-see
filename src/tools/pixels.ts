@@ -17,7 +17,7 @@ import {
   rgbToHex,
   linearColorDiff,
 } from "./color.js";
-import { writeOutput, deriveDefaultOutput, encodeForOutput } from "./output.js";
+import { writeOutput, deriveDefaultOutput, encodeForOutput, OUTPUT_PATH_CONVENTION } from "./output.js";
 import {
   limitsOf,
   regionSchema,
@@ -57,7 +57,8 @@ export const CROP_TOOL: LocalToolEntry<CropArgs> = {
         output: {
           type: "string",
           description:
-            "输出文件路径（支持 ~ 展开；按扩展名编码：.png → PNG，.jpg/.jpeg → JPEG）。URL/clipboard/latest 来源时必填",
+            "输出文件路径（支持 ~ 展开；按扩展名编码：.png → PNG，.jpg/.jpeg → JPEG）。URL/clipboard/latest 来源时必填。" +
+            OUTPUT_PATH_CONVENTION,
         },
         scale: {
           type: "number",

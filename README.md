@@ -148,8 +148,69 @@ see_image({
 ## CLI
 
 ```bash
-npx j-can-see --hook   # print the PreToolUse hook script; save it locally and wire it up in Claude Code settings
+npx j-can-see --hook         # print the PreToolUse hook script; save it locally and wire it up in Claude Code settings
+npx j-can-see --skill        # install SKILL.md as an Agent Skill into ~/.claude/skills, ~/.agents/skills and ~/.codex/skills
+npx j-can-see --print-skill  # print SKILL.md contents so you can place it yourself
 ```
+
+> The MCP server ships tools only — tool descriptions are the sole text an MCP client is
+> guaranteed to inject into model context. The methodology in SKILL.md (including the
+> `.j-can-see/` output-path convention) reaches the model via the separate Agent Skills
+> mechanism; **the server installs it automatically on every start** (skipped when the
+> content is unchanged; disable with `J_SEE_SKILL_AUTO_INSTALL=0`), so no manual step is
+> needed. The two commands below exist for manual install/inspection and are not required.
+
+## Installing the skill into other AI tools (manual)
+
+Auto-install currently covers four locations: Claude Code–specific `~/.claude/skills`,
+Codex-specific `~/.codex/skills`, the cross-tool shared directory `~/.agents/skills`
+(read by Claude/Codex/Cursor/ZCode and others — one copy serves every tool), and
+ZCode-specific `~/.zcode/skills`.
+For any other AI tool (especially less mainstream clients), install manually using
+`~/.codex` as the example:
+
+```bash
+# 1. Create the skill directory: ~/.<tool-name>/skills/<skill-name>/
+mkdir -p ~/.codex/skills/j-can-see
+
+# 2. Write SKILL.md into it (--print-skill outputs the version bundled with this package)
+npx j-can-see --print-skill > ~/.codex/skills/j-can-see/SKILL.md
+# or copy from the repo: cp SKILL.md ~/.codex/skills/j-can-see/
+
+# 3. Restart the AI tool; new sessions pick it up
+```
+
+Notes:
+
+- **The directory name is the skill name**: `j-can-see` in `~/.<tool-name>/skills/j-can-see/`
+  must not be renamed; the file must be named `SKILL.md` and start with `---` frontmatter
+  (`name` + `description`) — Agent Skills–compliant tools discover skills via these three.
+- **Not sure where a tool keeps its skills directory?** Look up "skills" / "Agent Skills"
+  in that tool's docs. The usual convention is user-global `~/.<tool-name>/skills/<skill-name>/SKILL.md`;
+  `~/.agents/skills` is a cross-tool shared directory (Claude/Codex/Cursor/ZCode and others
+  read it), so one copy there serves every such tool; some tools also support project-level
+  `<project>/.<tool-name>/skills/<skill-name>/SKILL.md` (copy SKILL.md there to scope it to
+  that project only).
+- **Verify**: `ls ~/.codex/skills/j-can-see/` should show SKILL.md; after restarting the
+  tool, `j-can-see` should appear in the session's skill list and load on image tasks.
+
+### Why a skill is needed (MCP alone is not enough)
+
+- **MCP only guarantees tool descriptions reach the model**: each tool returned by
+  `tools/list` carries name / description / inputSchema — the only text every client
+  injects unconditionally. That's why the critical output-path convention also lives in
+  the `output` parameter descriptions of crop / extract_fg / trace (the safety net).
+- **The full methodology cannot fit in tool descriptions**: the tool-selection decision
+  tree, coarse-to-fine workflow, five scenario playbooks and boundary warnings are
+  hundreds of lines; embedding them would bloat every session by thousands of tokens.
+- **Progressive disclosure**: only the one-line frontmatter description stays resident
+  (tens of tokens); SKILL.md loads in full only when the model decides the task involves
+  image work — rich knowledge at minimal context cost.
+- **Division of labor**: MCP provides capability (9 callable tools), the skill provides
+  knowledge (how to use them well). Without the skill everything still works, but the
+  model lacks orchestration knowledge — in real sessions the AI left stray files under
+  self-chosen `/tmp` directories and let long-image OCR time out entirely, classic
+  symptoms of missing methodology.
 
 ### `source` values
 
