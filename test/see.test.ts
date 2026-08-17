@@ -95,6 +95,28 @@ describe("SEE_IMAGE_TOOL", () => {
     expect(parsed.error?.issues[0]?.message).toContain("region 仅支持单图");
   });
 
+  it("source 传序列化数组字符串（调用方模型实测误用）也能多图对比", async () => {
+    const a = await makePng(60, 60, 0xff0000ff);
+    const b = await makePng(60, 60, 0x00ff00ff);
+    const f = mockFetch("两张图颜色不同");
+    const text = await runVision(
+      SEE_IMAGE_TOOL,
+      { source: '["a.png", "b.png"]', prompt: "有什么不同" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }), fetchImpl: f },
+    );
+    expect(text).toBe("两张图颜色不同");
+    const body = JSON.parse(f.calls[0][1].body as string);
+    expect(body.messages[0].content).toHaveLength(3);
+    expect(body.messages[0].content.filter((c: { type: string }) => c.type === "image_url")).toHaveLength(2);
+  });
+
+  it("数组样子的非法 JSON 字符串仍按普通路径处理（不误伤合法文件名）", () => {
+    const parsed = SEE_IMAGE_TOOL.schema.parse({
+      source: "[broken.png",
+    }) as { source: string[] };
+    expect(parsed.source).toEqual(["[broken.png"]);
+  });
+
   it("空字符串 source 被 schema 拒绝", () => {
     expect(SEE_IMAGE_TOOL.schema.safeParse({ source: "" }).success).toBe(false);
   });

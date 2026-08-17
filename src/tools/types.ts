@@ -78,15 +78,56 @@ export function limitsOf(config: BaseConfig): ImageLimits {
 }
 
 /**
+ * 防御：部分调用方模型会把数组序列化成 JSON 字符串再传
+ *（实测 GLM-5.3 多图场景 6 次，工具侧只能当路径解析，以「文件不存在」收场）。
+ * 字符串能解析出非空 string[] 时视为数组意图返回；否则返回 null，按普通字符串处理。
+ */
+export function unwrapStringifiedArray(s: string): string[] | null {
+  const t = s.trim();
+  if (!t.startsWith("[")) return null;
+  try {
+    const v: unknown = JSON.parse(t);
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      v.every((x) => typeof x === "string" && x.trim().length > 0)
+    ) {
+      return v;
+    }
+  } catch {
+    // 非法 JSON：按普通字符串落回
+  }
+  return null;
+}
+
+/**
  * source：支持单值（向后兼容）或数组（多图对比）。
  * 统一 transform 为 string[]，下游无需区分。
+ * 字符串形态的序列化数组（调用方模型常见误用）在此透明还原为数组。
  */
 export const sourceSchema = z
   .union([z.string().min(1, "source 不能为空"), z.array(z.string().min(1)).min(1)])
-  .transform((v) => (Array.isArray(v) ? v : [v]));
+  .transform((v) => {
+    if (typeof v !== "string") return v;
+    return unwrapStringifiedArray(v) ?? [v];
+  });
 
-/** 单图 source：locate/inspect/ocr_long 只处理一张图，明确拒绝数组（不静默丢弃） */
-export const singleSourceSchema = z.string().min(1, "source 不能为空");
+/**
+ * 单图 source：locate/inspect/ocr_long 只处理一张图，明确拒绝数组（不静默丢弃）。
+ * 序列化数组字符串给明确的参数错误，而非落进文件解析报「文件不存在」。
+ */
+export const singleSourceSchema = z
+  .string()
+  .min(1, "source 不能为空")
+  .superRefine((s, ctx) => {
+    const arr = unwrapStringifiedArray(s);
+    if (arr) {
+      ctx.addIssue({
+        code: "custom",
+        message: `本工具仅支持单张图片，但 source 是序列化的数组字符串（${arr.length} 张）；请传单个路径，多图对比请用 see_image`,
+      });
+    }
+  });
 
 /**
  * region 必填版（crop 等必须指定区域的工具用）。
@@ -102,7 +143,7 @@ export const regionSchema = regionRequiredSchema.optional();
 /** JSON Schema 中 source 字段的描述（单值或数组） */
 export const sourceProperty = {
   description:
-    "图片来源：单个字符串，或字符串数组（多图对比）。" +
+    "图片来源：单个字符串，或字符串数组（多图对比，直接传数组本身，不要序列化成字符串）。" +
     '可用值：本地路径（支持 ~ 展开）、http(s) URL、"latest"（截图目录最新图）、"clipboard"（剪贴板，仅 mac/win）',
   type: ["string", "array"],
   items: { type: "string" },
@@ -112,7 +153,7 @@ export const sourceProperty = {
 export const singleSourceProperty = {
   type: "string",
   description:
-    '图片来源：本地路径（支持 ~ 展开）、http(s) URL、"latest"（截图目录最新图）、"clipboard"（剪贴板，仅 mac/win）。仅支持单张图片',
+    '图片来源：本地路径（支持 ~ 展开）、http(s) URL、"latest"（截图目录最新图）、"clipboard"（剪贴板，仅 mac/win）。仅支持单张图片（不要传数组）',
 } as const;
 
 /** JSON Schema 中 region 字段的描述 */

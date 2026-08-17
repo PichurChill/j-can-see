@@ -17,6 +17,7 @@ import {
   limitsOf,
   regionSchema,
   regionProperty,
+  singleSourceSchema,
   type ToolDeps,
   type LocalToolEntry,
 } from "./types.js";
@@ -24,7 +25,7 @@ import {
 // ---------- trace ----------
 
 export const traceSchema = z.object({
-  source: z.string().min(1, "source 不能为空"),
+  source: singleSourceSchema,
   region: regionSchema,
   colors: z.number().int().min(2).max(64).optional(),
   output: z.string().optional(),
@@ -109,7 +110,7 @@ export const TRACE_TOOL: LocalToolEntry<TraceArgs> = {
 // ---------- extract_fg ----------
 
 export const extractFgSchema = z.object({
-  source: z.string().min(1, "source 不能为空"),
+  source: singleSourceSchema,
   region: regionSchema,
   background: z.string().optional(),
   threshold: z.number().min(0).max(255).optional(),

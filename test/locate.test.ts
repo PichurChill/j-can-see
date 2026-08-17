@@ -79,6 +79,16 @@ describe("LOCATE_TOOL", () => {
     ).toBe(false);
   });
 
+  it("序列化数组字符串给明确参数错误（而非落进文件解析报「文件不存在」）", () => {
+    const parsed = LOCATE_TOOL.schema.safeParse({
+      source: '["a.png", "b.png"]',
+      target: "按钮",
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toContain("仅支持单张图片");
+    expect(parsed.error?.issues[0]?.message).toContain("see_image");
+  });
+
   it("无法解析坐标时返回模型原文", async () => {
     const text = await runVision(
       LOCATE_TOOL,

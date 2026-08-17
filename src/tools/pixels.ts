@@ -23,6 +23,7 @@ import {
   regionSchema,
   regionRequiredSchema,
   regionProperty,
+  singleSourceSchema,
   type ToolDeps,
   type LocalToolEntry,
 } from "./types.js";
@@ -30,7 +31,7 @@ import {
 // ---------- crop ----------
 
 export const cropSchema = z.object({
-  source: z.string().min(1, "source 不能为空"),
+  source: singleSourceSchema,
   region: regionRequiredSchema,
   output: z.string().optional(),
   scale: z.number().positive().optional(),
@@ -253,7 +254,7 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
 // ---------- colors ----------
 
 export const colorsSchema = z.object({
-  source: z.string().min(1, "source 不能为空"),
+  source: singleSourceSchema,
   region: regionSchema,
   top: z.number().int().positive().max(32).optional(),
   candidates: z.array(z.string()).min(1).optional(),
