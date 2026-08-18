@@ -8,7 +8,12 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { readSource } from "../sources/index.js";
 import { processImageWithScale } from "../image.js";
-import { callVision } from "../vision.js";
+import {
+  runManagedVisionCall,
+  degradeNotice,
+  DEGRADE_EDGE,
+} from "../retry.js";
+import { getGlobalPool, newCallContext } from "../pool.js";
 import {
   extractBoxByLabel,
   toOriginal,
@@ -23,6 +28,13 @@ import {
   type ToolDeps,
   type VisionToolEntry,
 } from "./types.js";
+
+/** locate/inspect 共用：缩放图与坐标换算所需的元数据（随降质档位变化） */
+interface ScaleMeta {
+  readonly scale: number;
+  readonly originalWidth: number;
+  readonly originalHeight: number;
+}
 
 export const locateSchema = z.object({
   source: singleSourceSchema,
@@ -57,8 +69,10 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
     config: AppConfig,
     deps: ToolDeps = {},
   ): Promise<string> {
+    const pool = deps.pool ?? getGlobalPool(config.J_SEE_MAX_CONCURRENT);
+    const deadline = Date.now() + config.J_SEE_TIMEOUT_MS;
+    const limits = limitsOf(config);
     const raw = await readSource(args.source, deps.reader);
-    const img = await processImageWithScale(raw, limitsOf(config));
 
     const prompt =
       `在图片中定位「${args.target}」。\n` +
@@ -67,27 +81,58 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
       "找不到则只返回：NOT_FOUND\n" +
       "不要输出任何其他内容。";
 
-    const text = await callVision(
-      { images: [img], prompt },
-      config,
-      deps.fetchImpl,
+    const r = await runManagedVisionCall<ScaleMeta>(
+      {
+        buildImages: async (maxEdge) => {
+          const img = await processImageWithScale(raw, {
+            ...limits,
+            maxEdge,
+          });
+          return {
+            images: [{ base64: img.base64, mime: img.mime }],
+            meta: {
+              scale: img.scale,
+              originalWidth: img.originalWidth,
+              originalHeight: img.originalHeight,
+            },
+          };
+        },
+        prompt,
+        fullMaxEdge: limits.maxEdge,
+        degradable: limits.maxEdge > DEGRADE_EDGE,
+        deadline,
+        label: "locate",
+        busyHint: "可稍后重试，或先用 crop 裁出目标区域后在局部图上重试。",
+      },
+      {
+        config,
+        pool,
+        ctx: newCallContext(),
+        fetchImpl: deps.fetchImpl,
+        sleepImpl: deps.sleepImpl,
+        tuning: deps.tuning,
+      },
     );
+    const text = r.text;
+    const notice = degradeNotice(r.degraded);
 
     if (/NOT_FOUND/i.test(text.trim())) {
       return (
         `未找到目标「${args.target}」。可尝试：` +
         `① 长图/高图会被等比压缩（长边上限 ${config.J_SEE_MAX_EDGE}px），` +
         `小目标可能因此不可辨 —— 先用 crop 裁出大致区域，在局部图上重新 locate；` +
-        `② 改用 inspect 枚举全部元素后自行挑选。`
+        `② 改用 inspect 枚举全部元素后自行挑选。` +
+        notice
       );
     }
 
-    // 按行提取坐标框：模型返回多个匹配时全部列出（静默取首个会误导 GUI 自动化）
+    // 按行提取坐标框：模型返回多个匹配时全部列出（静默取首个会误导 GUI 自动化）。
+    // 换算用 meta 里的 scale —— 与实际发送的那张图（可能已降质）严格对应
     const toOrig = (b: Box) =>
       clampBox(
-        toOriginal(b, img.scale),
-        img.originalWidth,
-        img.originalHeight,
+        toOriginal(b, r.meta.scale),
+        r.meta.originalWidth,
+        r.meta.originalHeight,
       );
     const lineBoxes = text
       .split("\n")
@@ -104,15 +149,16 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
           })();
 
     if (boxes.length === 0) {
-      return `无法解析坐标，模型返回原文：\n${text}`;
+      return `无法解析坐标，模型返回原文：\n${text}${notice}`;
     }
     if (boxes.length === 1) {
-      return `找到「${args.target}」：${formatBox(boxes[0])}`;
+      return `找到「${args.target}」：${formatBox(boxes[0])}${notice}`;
     }
     return (
       `找到 ${boxes.length} 个「${args.target}」匹配（target 描述可能过于宽泛，` +
       `建议细化后重试；已全部列出）：\n` +
-      boxes.map((b, i) => `${i + 1}. ${formatBox(b)}`).join("\n")
+      boxes.map((b, i) => `${i + 1}. ${formatBox(b)}`).join("\n") +
+      notice
     );
   },
 };

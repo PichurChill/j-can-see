@@ -95,8 +95,11 @@ J_SEE_MODEL = "grok-4.5"
 | `J_SEE_MAX_EDGE` | 否 | `1568` | 图片压缩长边像素上限 |
 | `J_SEE_MAX_BYTES` | 否 | `52428800` | 源文件体积上限（字节） |
 | `J_SEE_MAX_PIXELS` | 否 | `40000000` | 解码后像素数上限，解码前从图片头校验 |
-| `J_SEE_TIMEOUT_MS` | 否 | `90000` | 单次视觉调用超时（毫秒） |
+| `J_SEE_TIMEOUT_MS` | 否 | `90000` | 单次视觉工具调用的总预算（毫秒，含排队与重试）；超时会自动降质重试并在结果中注明 |
 | `J_SEE_OCR_TOTAL_TIMEOUT_MS` | 否 | `85000` | `ocr_long` 多块总预算（毫秒）；耗尽时返回已完成的部分 |
+| `J_SEE_MAX_CONCURRENT` | 否 | `3` | 全局视觉并发上限（1-8）；429/5xx/超时自动降档，新调用自动试探回升 |
+| `J_SEE_MAX_ATTEMPTS` | 否 | `3` | 单次视觉调用的总尝试上限（首发 + 重试） |
+| `J_SEE_TASK_BUDGET_MS` | 否 | `85000` | `see_image` each 批量模式总预算（毫秒）；耗尽时返回部分结果 + 续调参数 |
 | `J_SEE_SKILL_AUTO_INSTALL` | 否 | `1` | 设为 `0` 关闭自动安装 skill |
 
 缺 `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL` 不影响 server 启动：本地像素工具照常可用，视觉工具被调用时返回清晰的配置错误。

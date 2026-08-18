@@ -11,7 +11,8 @@
  * 实现要点（均来自实测，非猜测）：
  * 1. 强制 User-Agent —— CF bot 防护会对默认/空 UA 返回 403
  * 2. 超时短于 CF Tunnel 的 100s 上限，让客户端先于 524 给出清晰错误
- * 3. 不重试、不降级 —— 失败原样上报，调用方据 status 决策
+ * 3. 单次调用不重试、不降级 —— 失败带 kind 分类原样上抛，
+ *    重试/降质/并发编排统一在 retry.ts 的包装层，本模块保持纯净
  */
 import { VisionError, VisionTimeoutError } from "./errors.js";
 import type { AppConfig } from "./config.js";
@@ -190,6 +191,7 @@ function buildRequest(
     default:
       throw new VisionError(
         `不支持的 J_SEE_API_SPEC: ${JSON.stringify(config.J_SEE_API_SPEC)}，支持 responses / openai / anthropic`,
+        { kind: "client" },
       );
   }
 }
@@ -216,7 +218,7 @@ function parseResponsesContent(data: unknown): string {
           .join("")
       : "";
   if (text.length === 0) {
-    throw new VisionError("视觉调用返回内容为空");
+    throw new VisionError("视觉调用返回内容为空", { kind: "empty" });
   }
   return text;
 }
@@ -229,7 +231,7 @@ function parseOpenAIContent(data: unknown): string {
     }
   )?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || content.length === 0) {
-    throw new VisionError("视觉调用返回内容为空");
+    throw new VisionError("视觉调用返回内容为空", { kind: "empty" });
   }
   return content;
 }
@@ -249,7 +251,7 @@ function parseAnthropicContent(data: unknown): string {
           .join("")
       : "";
   if (text.length === 0) {
-    throw new VisionError("视觉调用返回内容为空");
+    throw new VisionError("视觉调用返回内容为空", { kind: "empty" });
   }
   return text;
 }
@@ -267,8 +269,21 @@ function parseContent(data: unknown, config: AppConfig): string {
     default:
       throw new VisionError(
         `不支持的 J_SEE_API_SPEC: ${JSON.stringify(config.J_SEE_API_SPEC)}，支持 responses / openai / anthropic`,
+        { kind: "client" },
       );
   }
+}
+
+/**
+ * 解析 429 响应的 Retry-After 头（秒数或 HTTP-date），转为毫秒。
+ * 解析不出返回 undefined，由重试编排落到默认退避。
+ */
+function parseRetryAfterMs(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const secs = Number(header);
+  if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 }
 
 export async function callVision(
@@ -276,9 +291,9 @@ export async function callVision(
   config: AppConfig,
   fetchImpl: FetchLike = fetch,
   /**
-   * 单次调用超时覆盖（毫秒）。省略用 J_SEE_TIMEOUT_MS。
-   * ocr_long 用它把每块的超时压到「总预算的剩余时间」，
-   * 保证整体不撞客户端的工具级超时（如 100s）。
+   * 单次 HTTP 调用的超时（毫秒）。生产路径（retry.ts 编排 / ocr 分块）
+   * 均按剩余预算显式传入；省略时以 J_SEE_TIMEOUT_MS 兜底 ——
+   * 对无编排的直接调用者，「单次调用 = 整个调用」，拿总预算值仍是正确语义。
    */
   timeoutMs?: number,
   /**
@@ -313,10 +328,20 @@ export async function callVision(
     });
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
-      throw new VisionTimeoutError(`视觉调用超时（${effectiveTimeout}ms）`);
+      // 外部 signal 已触发 = 上层主动取消（非上游容量信号），标记 external
+      // 供池层跳过降档；与真超时同时发生时按外部取消算 —— 上层已记录真实
+      // 错误，此块结果无用，更不该产生容量信号
+      const external = signal?.aborted === true;
+      throw new VisionTimeoutError(
+        external
+          ? "视觉调用被取消（上层已停止本批调用）"
+          : `视觉调用超时（${effectiveTimeout}ms）`,
+        external,
+      );
     }
     throw new VisionError(
       `视觉调用网络错误：${e instanceof Error ? e.message : String(e)}`,
+      { kind: "network" },
     );
   } finally {
     clearTimeout(timer);
@@ -335,7 +360,14 @@ export async function callVision(
       `视觉调用失败：HTTP ${resp.status}${hint}${
         text ? ` ${text.slice(0, 300)}` : ""
       }`,
-      resp.status,
+      {
+        status: resp.status,
+        // kind 由 status 自动推导（429→rate_limit / 5xx→server / 其余→client）
+        retryAfterMs:
+          resp.status === 429
+            ? parseRetryAfterMs(resp.headers.get("retry-after"))
+            : undefined,
+      },
     );
   }
 
@@ -345,6 +377,7 @@ export async function callVision(
   } catch (e) {
     throw new VisionError(
       `视觉调用返回非法 JSON：${e instanceof Error ? e.message : String(e)}`,
+      { kind: "parse" },
     );
   }
 

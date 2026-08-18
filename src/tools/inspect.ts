@@ -7,7 +7,12 @@ import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { readSource } from "../sources/index.js";
 import { processImageWithScale } from "../image.js";
-import { callVision } from "../vision.js";
+import {
+  runManagedVisionCall,
+  degradeNotice,
+  DEGRADE_EDGE,
+} from "../retry.js";
+import { getGlobalPool, newCallContext } from "../pool.js";
 import {
   extractBoxByLabel,
   toOriginal,
@@ -109,8 +114,10 @@ export const INSPECT_TOOL: VisionToolEntry<InspectArgs> = {
     config: AppConfig,
     deps: ToolDeps = {},
   ): Promise<string> {
+    const pool = deps.pool ?? getGlobalPool(config.J_SEE_MAX_CONCURRENT);
+    const deadline = Date.now() + config.J_SEE_TIMEOUT_MS;
+    const limits = limitsOf(config);
     const raw = await readSource(args.source, deps.reader);
-    const img = await processImageWithScale(raw, limitsOf(config));
 
     const kind = args.kind?.trim() || DEFAULT_KIND;
     const prompt =
@@ -120,23 +127,58 @@ export const INSPECT_TOOL: VisionToolEntry<InspectArgs> = {
       "坐标为图中像素（左上角为原点）。无文字的元素文字部分写「(无文字)」。\n" +
       "不要输出其他内容。";
 
-    const text = await callVision(
-      { images: [img], prompt, maxTokens: INSPECT_MAX_TOKENS },
-      config,
-      deps.fetchImpl,
+    const r = await runManagedVisionCall<{
+      scale: number;
+      originalWidth: number;
+      originalHeight: number;
+    }>(
+      {
+        buildImages: async (maxEdge) => {
+          const img = await processImageWithScale(raw, {
+            ...limits,
+            maxEdge,
+          });
+          return {
+            images: [{ base64: img.base64, mime: img.mime }],
+            meta: {
+              scale: img.scale,
+              originalWidth: img.originalWidth,
+              originalHeight: img.originalHeight,
+            },
+          };
+        },
+        prompt,
+        maxTokens: INSPECT_MAX_TOKENS,
+        fullMaxEdge: limits.maxEdge,
+        degradable: limits.maxEdge > DEGRADE_EDGE,
+        deadline,
+        label: "inspect",
+        busyHint: "可稍后重试，或缩小 kind 范围减少输出。",
+      },
+      {
+        config,
+        pool,
+        ctx: newCallContext(),
+        fetchImpl: deps.fetchImpl,
+        sleepImpl: deps.sleepImpl,
+        tuning: deps.tuning,
+      },
     );
+    const notice = degradeNotice(r.degraded);
 
+    // 换算用 meta 里的 scale —— 与实际发送的那张图（可能已降质）严格对应
     const items = parseInspectLines(
-      text,
-      img.scale,
-      img.originalWidth,
-      img.originalHeight,
+      r.text,
+      r.meta.scale,
+      r.meta.originalWidth,
+      r.meta.originalHeight,
     );
     if (items.length === 0) {
-      return `未检测到「${kind}」。模型返回原文：\n${text}`;
+      return `未检测到「${kind}」。模型返回原文：\n${r.text}${notice}`;
     }
-    return items
-      .map((i) => `${i.index}. ${i.label} ${formatBox(i.box)}`)
-      .join("\n");
+    return (
+      items.map((i) => `${i.index}. ${i.label} ${formatBox(i.box)}`).join("\n") +
+      notice
+    );
   },
 };

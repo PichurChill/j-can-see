@@ -342,7 +342,7 @@ describe("ocrWithBudget（预算调度）", () => {
     const chunks = [{ y: 0, yEnd: 10 }];
     const run = async (): Promise<string> => {
       await sleep(30);
-      throw new VisionError("视觉调用失败：HTTP 401", 401);
+      throw new VisionError("视觉调用失败：HTTP 401", { status: 401 });
     };
     const { results, error } = await ocrWithBudget(chunks, 1, 10, 1000, run, 5);
     expect((error as VisionError).status).toBe(401);

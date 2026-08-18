@@ -412,7 +412,7 @@ describe("callVision", () => {
     expect(fetchCalled).toBe(true);
   });
 
-  it("外部 signal 触发时立即中断在途调用（与超时同型报错）", async () => {
+  it("外部 signal 触发时立即中断在途调用（标记 external，供池层跳过降档）", async () => {
     const slow: FetchLike = async (_url: string, init: RequestInit) => {
       await new Promise<void>((resolve, reject) => {
         const t = setTimeout(resolve, 5000); // 远超测试时长，只能被 signal 掐断
@@ -428,7 +428,11 @@ describe("callVision", () => {
     const t0 = Date.now();
     await expect(
       callVision(INPUT, config, slow, 60_000, external.signal),
-    ).rejects.toThrow(/视觉调用超时/);
+    ).rejects.toMatchObject({
+      name: "VisionTimeoutError",
+      external: true,
+      message: expect.stringContaining("视觉调用被取消"),
+    });
     expect(Date.now() - t0).toBeLessThan(300); // 20ms 触发，而非等 60s 超时
   });
 

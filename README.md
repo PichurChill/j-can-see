@@ -95,8 +95,11 @@ J_SEE_MODEL = "grok-4.5"
 | `J_SEE_MAX_EDGE` | No | `1568` | Max long-edge pixels for image compression |
 | `J_SEE_MAX_BYTES` | No | `52428800` | Max source file size in bytes |
 | `J_SEE_MAX_PIXELS` | No | `40000000` | Max decoded pixels, checked from the header before decode |
-| `J_SEE_TIMEOUT_MS` | No | `90000` | Per vision call timeout in ms |
+| `J_SEE_TIMEOUT_MS` | No | `90000` | Total budget per vision tool call in ms (incl. queueing and retries); timeouts auto-retry at lower resolution with a note in the result |
 | `J_SEE_OCR_TOTAL_TIMEOUT_MS` | No | `85000` | Total budget for multi-chunk `ocr_long` in ms; returns partial results when exhausted |
+| `J_SEE_MAX_CONCURRENT` | No | `3` | Global vision concurrency cap (1-8); auto-demotes on 429/5xx/timeout, probes back up on new calls |
+| `J_SEE_MAX_ATTEMPTS` | No | `3` | Max attempts per vision call (first try + retries) |
+| `J_SEE_TASK_BUDGET_MS` | No | `85000` | Total budget for `see_image` each-batch mode in ms; returns partial results + resume params when exhausted |
 | `J_SEE_SKILL_AUTO_INSTALL` | No | `1` | Set to `0` to disable automatic skill installation |
 
 The server still starts without `J_SEE_TOKEN` / `J_SEE_BASE_URL` / `J_SEE_MODEL`: local pixel tools keep working, and vision tools return a clear config error when called.

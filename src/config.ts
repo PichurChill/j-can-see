@@ -71,14 +71,43 @@ const baseEnvSchema = z.object({
     .positive()
     .default(40_000_000),
 
-  // 视觉调用超时（毫秒）。需短于 CF Tunnel 的 100s 上限，
-  // 让客户端先于 524 给出清晰错误
+  // 单次视觉工具调用的总预算（毫秒，含排队 / 预处理 / 重试）。
+  // 需短于 CF Tunnel 的 100s 上限与客户端 MCP 工具超时，
+  // 让服务端先于 524 / 客户端掐断给出清晰错误或降质结果
   J_SEE_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
 
   // ocr_long 的总时间预算（毫秒），默认 85s —— 低于常见客户端的
   // MCP 工具级超时（如 ZCode 100s）。多块 OCR 的总时长若无上限，
   // 会被客户端整单掐断、颗粒无收；预算耗尽时返回已完成的部分结果。
   J_SEE_OCR_TOTAL_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(85_000),
+
+  // 全局视觉并发上限（进程级唯一 worker 池的初始档位）。
+  // 上游 429/5xx/超时会自动降档（floor 1），新工具调用时 +1 试探回升。
+  // 上限 8 是防呆而非性能推荐：个人代理扛不住更高的视觉并发，
+  // 且 85s 任务预算内 8 并发的吞吐已超过典型任务规模
+  J_SEE_MAX_CONCURRENT: z.coerce
+    .number()
+    .int()
+    .min(1, "J_SEE_MAX_CONCURRENT 最小为 1")
+    .max(8, "J_SEE_MAX_CONCURRENT 最大为 8")
+    .default(3),
+
+  // 单次视觉工具调用的总尝试上限（首发 + 重试）。
+  // 与「剩余预算 ≥10s 才发起」构成双上限，两者任一触顶即停
+  J_SEE_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .min(1, "J_SEE_MAX_ATTEMPTS 最小为 1")
+    .default(3),
+
+  // 批量识图（see_image each 模式）的总时间预算（毫秒），默认 85s。
+  // 与 OCR 预算语义不同（批量图彼此独立、单张失败跳过；OCR 块同属一图、
+  // 真实故障熔断），刻意不共用一个配置项，避免调参互相影响
+  J_SEE_TASK_BUDGET_MS: z.coerce
     .number()
     .int()
     .positive()

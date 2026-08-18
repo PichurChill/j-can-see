@@ -8,6 +8,8 @@ import type { ImageLimits } from "../image.js";
 import { REGION_PATTERN } from "../image.js";
 import type { SourceReader } from "../sources/index.js";
 import type { FetchLike } from "../vision.js";
+import type { VisionPool } from "../pool.js";
+import type { RetryTuning } from "../retry.js";
 
 /** MCP 工具声明（inputSchema 为标准 JSON Schema） */
 export interface ToolDecl {
@@ -23,6 +25,12 @@ export interface ToolDecl {
 export interface ToolDeps {
   readonly reader?: SourceReader;
   readonly fetchImpl?: FetchLike;
+  /** 并发池注入（测试隔离用）；缺省取进程级全局单例 */
+  readonly pool?: VisionPool;
+  /** 退避 sleep 注入（测试免等待）；缺省真实 setTimeout */
+  readonly sleepImpl?: (ms: number) => Promise<void>;
+  /** 重试时间参数注入（测试缩短秒级常量）；缺省生产值 */
+  readonly tuning?: RetryTuning;
 }
 
 interface ToolEntryBase {

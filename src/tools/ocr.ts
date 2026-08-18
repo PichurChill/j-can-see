@@ -21,7 +21,8 @@ import {
   type DecodedImage,
   type ProcessedImage,
 } from "../image.js";
-import { callVision } from "../vision.js";
+import { callVisionPooled } from "../retry.js";
+import { getGlobalPool, newCallContext } from "../pool.js";
 import {
   limitsOf,
   singleSourceSchema,
@@ -42,8 +43,8 @@ const OVERLAP_RATIO = 0.12;
 /** OCR 块的输出 token 上限：密集文字块 2000 会截断 */
 const OCR_MAX_TOKENS = 8192;
 
-/** 并发块数：压缩墙钟时间，又不至于打爆上游 rate limit */
-const OCR_CONCURRENCY = 4;
+// 并发不再由本工具自定：块调用统一过全局池（J_SEE_MAX_CONCURRENT），
+// worker 数取池上限作上界 —— 杜绝「OCR 4 并发 + 批量 3 并发」两套上限叠加打上游
 
 /** 块数上限：超出则在切块前就 fail fast，而不是跑到一半让客户端超时 */
 const OCR_MAX_CHUNKS = 16;
@@ -345,6 +346,9 @@ export const OCR_LONG_TOOL: VisionToolEntry<OcrLongArgs> = {
     deps: ToolDeps = {},
   ): Promise<string> {
     const limits = limitsOf(config);
+    const pool = deps.pool ?? getGlobalPool(config.J_SEE_MAX_CONCURRENT);
+    // 整个 ocr_long 调用一枚试探权
+    const ctx = newCallContext();
     const raw = await readSource(args.source, deps.reader);
     const image = await decodeJimp(raw, limits);
     const maxEdge = limits.maxEdge;
@@ -359,17 +363,20 @@ export const OCR_LONG_TOOL: VisionToolEntry<OcrLongArgs> = {
       );
     }
 
+    // 块调用只过池 + 失败降档（callVisionPooled），不叠重试/降质 ——
+    // ocr 自有预算与部分结果机制，块内重试会吃掉其他块的预算；
+    // 排队时间计入块超时，等不到槽 = 该块未完成（VisionTimeoutError）
     const ocrBlock = (
       img: ProcessedImage,
       timeoutMs: number,
+      label: string,
       signal?: AbortSignal,
     ): Promise<string> =>
-      callVision(
+      callVisionPooled(
         { images: [img], prompt, maxTokens: OCR_MAX_TOKENS },
-        config,
-        deps.fetchImpl,
-        timeoutMs,
-        signal,
+        Date.now() + timeoutMs,
+        label,
+        { config, pool, ctx, fetchImpl: deps.fetchImpl, signal },
       );
 
     // 短图：单次 OCR（无需分块，也就没有边界与去重；单次超时受 J_SEE_TIMEOUT_MS 约束）
@@ -377,18 +384,20 @@ export const OCR_LONG_TOOL: VisionToolEntry<OcrLongArgs> = {
       return ocrBlock(
         await encodeProcessed(image, maxEdge),
         config.J_SEE_TIMEOUT_MS,
+        "ocr_long",
       );
     }
 
     const { results, error } = await ocrWithBudget(
       chunks,
-      OCR_CONCURRENCY,
+      config.J_SEE_MAX_CONCURRENT,
       config.J_SEE_OCR_TOTAL_TIMEOUT_MS,
       config.J_SEE_TIMEOUT_MS,
       async (i, timeoutMs, signal) =>
         ocrBlock(
           await encodeProcessed(sliceBlock(image, chunks[i]), maxEdge),
           timeoutMs,
+          `ocr_long chunk=${i + 1}/${chunks.length}`,
           signal,
         ),
     );
