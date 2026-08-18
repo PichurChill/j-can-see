@@ -35,8 +35,10 @@ export const inspectSchema = z.object({
 
 export type InspectArgs = z.infer<typeof inspectSchema>;
 
+// 嵌入英文 prompt，默认值同用英文（模型被指示对无文字元素写 "(no text)"，
+// 解析兜底与之保持同一占位符，避免同一输出混两种写法）
 const DEFAULT_KIND =
-  "UI 元素（按钮、链接、输入框、图标、标题、图片、徽章）";
+  "UI elements (buttons, links, inputs, icons, titles, images, badges)";
 
 /** 密集屏幕的元素列表输出较长，2000 会截断 */
 const INSPECT_MAX_TOKENS = 8192;
@@ -72,7 +74,7 @@ function parseInspectLines(
         .replace(/(?<![\w])[xy][12](?!\d)\s*[:：,，]\s*-?\d+/gi, "")
         .replace(/^\s*[-*•]?\s*\d+\s*[.、)]?\s*/, "")
         .replace(/[,，\s]+/g, " ")
-        .trim() || "(无文字)";
+        .trim() || "(no text)";
     items.push({
       index: items.length + 1,
       label,
@@ -121,11 +123,12 @@ export const INSPECT_TOOL: VisionToolEntry<InspectArgs> = {
 
     const kind = args.kind?.trim() || DEFAULT_KIND;
     const prompt =
-      `找出图片中所有「${kind}」。\n` +
-      "对每一个元素返回一行，格式严格为：\n" +
-      "<序号>. <可见文字> x1: <n>, y1: <n>, x2: <n>, y2: <n>\n" +
-      "坐标为图中像素（左上角为原点）。无文字的元素文字部分写「(无文字)」。\n" +
-      "不要输出其他内容。";
+      `Find all "${kind}" elements in the image.\n` +
+      "Return one line per element, strictly in this format:\n" +
+      "<index>. <visible text> x1: <n>, y1: <n>, x2: <n>, y2: <n>\n" +
+      "Coordinates are in image pixels (origin at top-left). " +
+      "For elements without text, write (no text).\n" +
+      "Do not output anything else.";
 
     const r = await runManagedVisionCall<{
       scale: number;

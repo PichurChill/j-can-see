@@ -57,10 +57,11 @@ const MIN_CHUNK_BUDGET_MS = 10_000;
 
 function ocrPrompt(extra?: string): string {
   const base =
-    "逐字转录这张图片中的所有文字，严格保持原有的换行、缩进与结构。\n" +
-    "如果有发言人、时间戳、引用、列表等格式，原样保留。\n" +
-    "只输出转录的文字内容，不要添加解释、注释或多余说明。";
-  return extra ? `${base}\n\n额外要求：${extra}` : base;
+    "Transcribe all text in this image verbatim, strictly preserving the original " +
+    "line breaks, indentation, and structure.\n" +
+    "Preserve speaker names, timestamps, quotes, lists, and other formatting as-is.\n" +
+    "Output only the transcribed text — no explanations, comments, or extra notes.";
+  return extra ? `${base}\n\nAdditional requirements: ${extra}` : base;
 }
 
 /** 归一化比较（忽略空白差异），保留原文输出 */

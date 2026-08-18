@@ -35,7 +35,7 @@ describe("SEE_IMAGE_TOOL", () => {
     expect(body.messages[0].content[1].text).toBe("描述");
   });
 
-  it("省略 prompt 用默认描述指令", async () => {
+  it("省略 prompt 用默认描述指令（英文，含反推测约束）", async () => {
     const png = await makePng(50, 50);
     const f = mockFetch("ok");
     await runVision(
@@ -44,7 +44,9 @@ describe("SEE_IMAGE_TOOL", () => {
       { reader: readerFrom({ "x.png": png }), fetchImpl: f },
     );
     const body = JSON.parse(f.calls[0][1].body as string);
-    expect(body.messages[0].content[1].text).toContain("详细描述");
+    const text = body.messages[0].content[1].text as string;
+    expect(text).toContain("Describe this image in detail");
+    expect(text).toContain("cannot confirm");
   });
 
   it("region 先裁后看：请求体里的图就是裁剪后的尺寸", async () => {

@@ -75,11 +75,11 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
     const raw = await readSource(args.source, deps.reader);
 
     const prompt =
-      `在图片中定位「${args.target}」。\n` +
-      "严格按以下格式返回一行（坐标为图中像素，左上角为原点）：\n" +
+      `Locate "${args.target}" in the image.\n` +
+      "Return exactly one line in this format (coordinates in pixels, origin at top-left):\n" +
       "x1: <n>, y1: <n>, x2: <n>, y2: <n>\n" +
-      "找不到则只返回：NOT_FOUND\n" +
-      "不要输出任何其他内容。";
+      "If not found, return only: NOT_FOUND\n" +
+      "Do not output anything else.";
 
     const r = await runManagedVisionCall<ScaleMeta>(
       {

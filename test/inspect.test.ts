@@ -8,7 +8,7 @@ describe("INSPECT_TOOL", () => {
   it("解析多行元素列表（含文字与无文字）", async () => {
     const f = mockFetch(
       "1. 发送按钮 x1: 10, y1: 20, x2: 30, y2: 40\n" +
-        "2. (无文字) x1: 50, y1: 60, x2: 70, y2: 80",
+        "2. (no text) x1: 50, y1: 60, x2: 70, y2: 80",
     );
     const text = await runVision(
       INSPECT_TOOL,
@@ -16,14 +16,14 @@ describe("INSPECT_TOOL", () => {
       { reader: readerOf(await png80()), fetchImpl: f },
     );
     expect(text).toContain("1. 发送按钮 x1: 10, y1: 20, x2: 30, y2: 40");
-    expect(text).toContain("2. (无文字) x1: 50, y1: 60, x2: 70, y2: 80");
+    expect(text).toContain("2. (no text) x1: 50, y1: 60, x2: 70, y2: 80");
 
     // prompt 含 kind
     const body = JSON.parse(f.calls[0][1].body as string);
     expect(body.messages[0].content.at(-1).text).toContain("buttons");
   });
 
-  it("未传 kind 时用默认 UI 元素描述", async () => {
+  it("未传 kind 时用默认 UI 元素描述（英文，与英文 prompt 同语）", async () => {
     const f = mockFetch("1. 标题 x1: 0, y1: 0, x2: 50, y2: 20");
     await runVision(
       INSPECT_TOOL,
@@ -31,7 +31,7 @@ describe("INSPECT_TOOL", () => {
       { reader: readerOf(await png80()), fetchImpl: f },
     );
     const body = JSON.parse(f.calls[0][1].body as string);
-    expect(body.messages[0].content.at(-1).text).toContain("UI 元素");
+    expect(body.messages[0].content.at(-1).text).toContain("UI elements");
   });
 
   it("模型返回无可解析行时回退原文", async () => {
