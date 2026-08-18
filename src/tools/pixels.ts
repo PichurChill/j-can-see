@@ -162,6 +162,7 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
     description:
       "逐像素比较两张图片，返回总差异比例 + 差异密度最高的网格块坐标（本地操作，不调视觉模型）。" +
       "用于「写代码→截图→对比」循环定位变化，或对比设计稿与实现。返回的块坐标可喂给 see_image 的 region 查看具体变化。" +
+      "两图尺寸不同时自动把较大图缩放对齐到较小图（只缩不放，避免放大引入模糊），坐标以较小图为准。" +
       "含透明像素时：双方全透明的像素视为相同，透明度变化直接计为差异。",
     inputSchema: {
       type: "object",
@@ -193,13 +194,19 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
     const imgA = await decodeJimp(bufA, limits);
     const imgB = await decodeJimp(bufB, limits);
 
-    // 尺寸不一则以 A 为基准缩放 B，并向调用方披露（宽高比差异会计入差异）
+    // 尺寸不一则以面积较小者为基准：只缩不放（放大引入模糊且徒增计算），
+    // 较大图缩放对齐到较小图。坐标以较小图（ref）为准 —— 实现截图通常
+    // 是两者中较小者，region 回喂目标明确，且不受参数顺序影响
+    const aSize = `${imgA.width}×${imgA.height}`;
+    const bSize = `${imgB.width}×${imgB.height}`;
     const sizeMismatch =
       imgA.width !== imgB.width || imgA.height !== imgB.height;
-    const bSize = `${imgB.width}×${imgB.height}`;
+    const refIsA = imgA.width * imgA.height <= imgB.width * imgB.height;
     if (sizeMismatch) {
-      imgB.resize({ w: imgA.width, h: imgA.height });
+      const ref = refIsA ? imgA : imgB;
+      (refIsA ? imgB : imgA).resize({ w: ref.width, h: ref.height });
     }
+    const refName = refIsA ? "A" : "B";
 
     const dataA = imgA.bitmap.data;
     const dataB = imgB.bitmap.data;
@@ -231,7 +238,7 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
 
     let out = `${
       sizeMismatch
-        ? `注意：两图尺寸不同（A ${imgA.width}×${imgA.height}，B ${bSize}），B 已缩放对齐到 A 后比较，宽高比差异会计入差异。\n`
+        ? `注意：两图尺寸不同（A ${aSize}，B ${bSize}），已把较大图缩放对齐到较小图（${refName}）后比较，坐标以 ${refName} 为准；宽高比差异会计入差异。\n`
         : ""
     }差异比例：${pct.toFixed(2)}%（${diffPixels}/${total} 像素）`;
     if (regions.length > 0) {

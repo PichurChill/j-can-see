@@ -187,7 +187,7 @@ describe("IMAGE_DIFF_TOOL", () => {
     expect(text).toMatch(/x1: \d+, y1: \d+, x2: \d+, y2: \d+/);
   });
 
-  it("尺寸不同的图会先对齐再比较，并披露对齐行为", async () => {
+  it("尺寸不同的图会先对齐再比较：较大图缩放到较小图（只缩不放），坐标以较小图为准", async () => {
     const a = await makePng(40, 40, 0xff0000ff);
     const b = await makePng(80, 80, 0xff0000ff); // 颜色相同，对齐后应无差异
     const text = await runLocal(
@@ -197,7 +197,21 @@ describe("IMAGE_DIFF_TOOL", () => {
     );
     expect(text).toContain("差异比例：0.00%");
     expect(text).toContain("两图尺寸不同");
-    expect(text).toContain("B 已缩放对齐到 A");
+    expect(text).toContain("已把较大图缩放对齐到较小图（A）");
+    expect(text).toContain("坐标以 A 为准");
+  });
+
+  it("参数顺序颠倒（A 大 B 小）：仍只缩不放，坐标以较小图 B 为准", async () => {
+    const a = await makePng(80, 80, 0xff0000ff);
+    const b = await makePng(40, 40, 0xff0000ff); // 颜色相同，对齐后应无差异
+    const text = await runLocal(
+      IMAGE_DIFF_TOOL,
+      { a: "a.png", b: "b.png" },
+      { reader: readerFrom({ "a.png": a, "b.png": b }) },
+    );
+    expect(text).toContain("差异比例：0.00%");
+    expect(text).toContain("已把较大图缩放对齐到较小图（B）");
+    expect(text).toContain("坐标以 B 为准");
   });
 
   it("双方全透明的像素视为相同（RGB 是未定义值，不该计入差异）", async () => {
