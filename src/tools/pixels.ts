@@ -62,7 +62,8 @@ export const CROP_TOOL: LocalToolEntry<CropArgs> = {
         },
         scale: {
           type: "number",
-          description: "放大倍数（如 4 = 放大 4 倍，BICUBIC），便于看清小图标",
+          description:
+            "缩放倍数（BICUBIC）：>1 放大（如 4 = 放大 4 倍，便于看清小图标），<1 缩小（如 0.5 = 缩小一半，可用于把图对齐到目标尺寸）",
         },
       },
       required: ["source", "region"],
@@ -162,7 +163,7 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
     description:
       "逐像素比较两张图片，返回总差异比例 + 差异密度最高的网格块坐标（本地操作，不调视觉模型）。" +
       "用于「写代码→截图→对比」循环定位变化，或对比设计稿与实现。返回的块坐标可喂给 see_image 的 region 查看具体变化。" +
-      "两图尺寸不同时自动把较大图缩放对齐到较小图（只缩不放，避免放大引入模糊），坐标以较小图为准。" +
+      "两图尺寸不同时自动以面积较小者为基准对齐（坐标以基准图为准；宽高比不同会拉伸，差异会计入结果）。" +
       "含透明像素时：双方全透明的像素视为相同，透明度变化直接计为差异。",
     inputSchema: {
       type: "object",
@@ -194,9 +195,11 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
     const imgA = await decodeJimp(bufA, limits);
     const imgB = await decodeJimp(bufB, limits);
 
-    // 尺寸不一则以面积较小者为基准：只缩不放（放大引入模糊且徒增计算），
-    // 较大图缩放对齐到较小图。坐标以较小图（ref）为准 —— 实现截图通常
-    // 是两者中较小者，region 回喂目标明确，且不受参数顺序影响
+    // 尺寸不一则以面积较小者为基准对齐（另一图 resize 到基准尺寸）。
+    // 面积基准使结果不受参数顺序影响；实现截图通常是两者中较小者，
+    // 坐标以基准图（ref）为准，region 回喂目标明确。
+    // 宽高比一致时对齐是纯缩小（不引入放大模糊）；宽高比不同则是拉伸，
+    // 差异会计入结果并在输出中披露
     const aSize = `${imgA.width}×${imgA.height}`;
     const bSize = `${imgB.width}×${imgB.height}`;
     const sizeMismatch =
@@ -238,7 +241,7 @@ export const IMAGE_DIFF_TOOL: LocalToolEntry<DiffArgs> = {
 
     let out = `${
       sizeMismatch
-        ? `注意：两图尺寸不同（A ${aSize}，B ${bSize}），已把较大图缩放对齐到较小图（${refName}）后比较，坐标以 ${refName} 为准；宽高比差异会计入差异。\n`
+        ? `注意：两图尺寸不同（A ${aSize}，B ${bSize}），已按面积较小者（${refName}）为基准对齐后比较，坐标以 ${refName} 为准；宽高比差异会计入差异。\n`
         : ""
     }差异比例：${pct.toFixed(2)}%（${diffPixels}/${total} 像素）`;
     if (regions.length > 0) {

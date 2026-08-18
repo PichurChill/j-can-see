@@ -28,10 +28,14 @@ const SWEEP_MIN_AGE_MS = 10 * 60 * 1000;
  * 正常路径由 readClipboard 的 finally 删除；仅进程被强杀（kill -9）时残留。
  * 只碰自己命名空间（唯一前缀）且修改时间超过 SWEEP_MIN_AGE_MS 的文件 ——
  * 刚产生的可能是并行实例的在途文件，不能删。best-effort、静默失败。
+ *
+ * @param dir 扫描目录，默认 os.tmpdir()。测试注入独立临时目录，
+ *   避免与并行测试进程 / 运行中的 server 启动清扫互相删文件。
  */
-export async function sweepStaleClipboardTemp(): Promise<number> {
+export async function sweepStaleClipboardTemp(
+  dir: string = os.tmpdir(),
+): Promise<number> {
   try {
-    const dir = os.tmpdir();
     const names = (await fs.readdir(dir)).filter((n) =>
       /^j-can-see-clip-[0-9a-f-]+\.png$/.test(n),
     );

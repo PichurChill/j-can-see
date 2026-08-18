@@ -74,7 +74,9 @@ describe("sweepStaleClipboardTemp", () => {
     const os = await import("node:os");
     const path = await import("node:path");
     const fs = (await import("node:fs/promises"));
-    const dir = os.tmpdir();
+    // 独立临时目录：sweep 扫描真实 os.tmpdir() 时，并行测试进程或运行中的
+    // server 启动清扫会先删掉本测试的 stale 文件（曾因此偶发 n=0）
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "j-can-see-sweep-test-"));
     const stale = path.join(dir, `j-can-see-clip-${crypto.randomUUID()}.png`);
     const fresh = path.join(dir, `j-can-see-clip-${crypto.randomUUID()}.png`);
     const other = path.join(dir, `j-can-see-sweep-other-${Date.now()}.png`);
@@ -85,13 +87,13 @@ describe("sweepStaleClipboardTemp", () => {
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await fs.utimes(stale, old, old);
     try {
-      const n = await sweepStaleClipboardTemp();
+      const n = await sweepStaleClipboardTemp(dir);
       await expect(fs.access(stale)).rejects.toThrow(); // 老残留被清
       await expect(fs.access(fresh)).resolves.toBeUndefined(); // 新文件保留
       await expect(fs.access(other)).resolves.toBeUndefined(); // 无关文件保留
       expect(n).toBeGreaterThanOrEqual(1);
     } finally {
-      await Promise.all([fs.unlink(fresh).catch(() => {}), fs.unlink(other).catch(() => {})]);
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });

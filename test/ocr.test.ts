@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Jimp } from "jimp";
+import { imageSize } from "image-size";
 import {
   OCR_LONG_TOOL,
   mergeTwo,
@@ -149,7 +149,10 @@ describe("OCR_LONG_TOOL", () => {
   it("块宽超过 maxEdge 时会被缩放（覆盖 sliceBlock 产出物的缩放路径）", async () => {
     // 前一个用例的块是 100×1568，两边都不超 maxEdge，encodeProcessed 里的
     // scaleToFit 根本不会执行 —— 那条路径需要宽图才能覆盖到。
-    // 2000×4000 → 3 块，每块 2000×1568，宽超限触发缩放
+    // 2000×4000 → 3 块，每块 2000×1568，宽超限触发缩放。
+    // 注意：本用例做真实 8M 像素解码/编码，负载下耗时可能远超默认 5s 超时，
+    // 显式放宽，并把断言做成 header-only（imageSize 不解码像素，毫秒级）。
+    // 30s 是防御性上限：正常环境 1-2s，极端负载也够。
     const png = await makePng(2000, 4000, 0xffffffff);
     const f = mockFetch("文字");
     const text = await runVision(
@@ -160,13 +163,13 @@ describe("OCR_LONG_TOOL", () => {
     expect(f.count()).toBe(3);
     expect(text).toContain("分 3 块");
 
-    // 请求体里的图确实被缩到了长边上限内
+    // 请求体里的图确实被缩到了长边上限内（imageSize 只读 header，不解码像素）
     const body = JSON.parse(f.calls[0][1].body as string);
     const url: string = body.messages[0].content[0].image_url.url;
-    const sent = await Jimp.read(Buffer.from(url.split(",")[1], "base64"));
+    const sent = imageSize(Buffer.from(url.split(",")[1], "base64"));
     expect(sent.width).toBeLessThanOrEqual(1568);
     expect(sent.height).toBeLessThanOrEqual(1568);
-  });
+  }, 30_000);
 
   it("块数超过上限时在发起 OCR 之前 fail fast", async () => {
     // 23000px 高 → 17 块 > 上限 16
