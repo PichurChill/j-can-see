@@ -16,6 +16,11 @@ import {
   hexToRgb,
   rgbToHex,
   linearColorDiff,
+  scanAxisProfile,
+  segmentAxisProfile,
+  type ProfileSegment,
+  type ProfileJump,
+  type Rgb,
 } from "./color.js";
 import { writeOutput, deriveDefaultOutput, encodeForOutput, OUTPUT_PATH_CONVENTION } from "./output.js";
 import {
@@ -269,8 +274,79 @@ export const colorsSchema = z.object({
   region: regionSchema,
   top: z.number().int().positive().max(32).optional(),
   candidates: z.array(z.string()).min(1).optional(),
+  profile: z.enum(["x", "y"]).optional(),
 });
 export type ColorsArgs = z.infer<typeof colorsSchema>;
+
+/** 相近簇提示的判定阈值：两个主色的最大通道差 ≤ 此值且 >0 时提示（实测细微色差 Δ=6，量化跨桶 ≤8） */
+const NEAR_CLUSTER_DIFF = 16;
+
+/** profile 噪声护栏：超过此分段/跳变数视为纹理噪声，不再逐段罗列 */
+const PROFILE_MAX_SEGMENTS = 24;
+const PROFILE_MAX_JUMPS = 16;
+
+/** 段起点终点各通道差均 ≤ 此值时判定为纯色（否则按渐变报告 Δ） */
+const FLAT_SEGMENT_DIFF = 2;
+
+function formatRgbDelta(a: Rgb, b: Rgb): string {
+  const parts: string[] = [];
+  const channels: Array<[string, number, number]> = [
+    ["R", a.r, b.r],
+    ["G", a.g, b.g],
+    ["B", a.b, b.b],
+  ];
+  for (const [name, va, vb] of channels) {
+    const d = Math.round(Math.abs(va - vb));
+    if (d > 0) parts.push(`Δ${name}=${d}`);
+  }
+  return parts.join(", ");
+}
+
+function formatSegment(seg: ProfileSegment, axis: "x" | "y"): string {
+  const color = `${rgbToHex(seg.start.r, seg.start.g, seg.start.b)}`;
+  const delta = formatRgbDelta(seg.start, seg.end);
+  const range = `${axis}=${seg.from}~${seg.to}`;
+  if (!delta || linearColorDiff(seg.start, seg.end) <= FLAT_SEGMENT_DIFF) {
+    return `${range}：${color}（纯色）`;
+  }
+  return `${range}：${color} → ${rgbToHex(seg.end.r, seg.end.g, seg.end.b)}（渐变 ${delta}）`;
+}
+
+function formatProfile(
+  segments: ProfileSegment[],
+  jumps: ProfileJump[],
+  axis: "x" | "y",
+): string {
+  if (segments.length > PROFILE_MAX_SEGMENTS || jumps.length > PROFILE_MAX_JUMPS) {
+    const top = [...jumps].sort((p, q) => q.diff - p.diff).slice(0, 5);
+    return (
+      `分段过多（${segments.length} 段 / ${jumps.length} 处跳变），多为纹理噪声 —— ` +
+      `profile 适合大面积纯色/渐变区域，可先用 region 缩小范围。变化最大的位置：\n` +
+      (top.length > 0
+        ? top
+            .map(
+              (j, i) =>
+                `${i + 1}. ${axis}=${j.at}：${rgbToHex(j.from.r, j.from.g, j.from.b)} → ${rgbToHex(j.to.r, j.to.g, j.to.b)}（最大通道差 ${Math.round(j.diff)}）`,
+            )
+            .join("\n")
+        : "无跳变（仅分段碎）")
+    );
+  }
+  let out = `共 ${segments.length} 段、${jumps.length} 处跳变：`;
+  // 跳变的 at 恒等于下一段的 from（segmentAxisProfile 的构造保证），
+  // 因此把跳变行缀在前一段末尾，读作「这一段结束时发生跳变」
+  let jumpIdx = 0;
+  for (let i = 0; i < segments.length; i++) {
+    out += `\n${i + 1}. ${formatSegment(segments[i], axis)}`;
+    const next = segments[i + 1];
+    if (next && jumpIdx < jumps.length && jumps[jumpIdx].at === next.from) {
+      const j = jumps[jumpIdx++];
+      out +=
+        `\n   ↳ ${axis}=${j.at} 跳变：${rgbToHex(j.from.r, j.from.g, j.from.b)} → ${rgbToHex(j.to.r, j.to.g, j.to.b)}（最大通道差 ${Math.round(j.diff)}）`;
+    }
+  }
+  return out;
+}
 
 export const COLORS_TOOL: LocalToolEntry<ColorsArgs> = {
   tool: {
@@ -278,7 +354,8 @@ export const COLORS_TOOL: LocalToolEntry<ColorsArgs> = {
     description:
       "分析图片主色，返回 top N 颜色（真实均值 hex + 占比，跳过完全透明像素）（本地操作，不调视觉模型）。" +
       "可传 candidates 候选色列表，返回与图像主色最接近的候选（精确色差计算，避免视觉模型对颜色的模糊描述）。" +
-      "用于 UI 还原时取精确色值。" +
+      "传 profile 则改为返回颜色沿纵/横轴的剖面：均匀段（纯色/渐变 + 起止色）与跳变点（位置 + 两侧 hex + Δ），" +
+      "用于检测细微色差、接缝、渐变断层（如「背景上下两半颜色不一致」）。" +
       "聚类按 5 位量化分桶（桶宽 8）：适合 UI 纯色；渐变或照片的主色会被打散成多个小簇，占比仅供参考。",
     inputSchema: {
       type: "object",
@@ -293,7 +370,14 @@ export const COLORS_TOOL: LocalToolEntry<ColorsArgs> = {
           type: "array",
           items: { type: "string" },
           description:
-            '候选色 hex 列表，如 ["#F9FAFA","#F5F5F5"]。返回与图像主色最接近的候选',
+            '候选色 hex 列表，如 ["#F9FAFA","#F5F5F5"]。返回与图像主色最接近的候选（主色模式专用，profile 模式下忽略）',
+        },
+        profile: {
+          type: "string",
+          enum: ["x", "y"],
+          description:
+            '剖面模式："y" 按行扫描（检测上下变化 / 水平接缝），"x" 按列扫描（检测左右变化 / 垂直接缝）。' +
+            "每行/列取主色后输出渐变段与跳变点，不返回 top N 主色",
         },
       },
       required: ["source"],
@@ -308,9 +392,29 @@ export const COLORS_TOOL: LocalToolEntry<ColorsArgs> = {
   ): Promise<string> {
     const raw = await readSource(args.source, deps.reader);
     const image = await decodeJimp(raw, limitsOf(config));
+    const originalSize = `${image.width}×${image.height}`;
     if (args.region) {
       const box = resolveRegion(args.region, image.width, image.height);
       image.crop({ x: box.x, y: box.y, w: box.w, h: box.h });
+    }
+    const header =
+      `原图 ${originalSize}` +
+      (args.region
+        ? `，region 裁剪后 ${image.width}×${image.height}`
+        : "");
+
+    if (args.profile) {
+      const lines = scanAxisProfile(
+        image.bitmap.data,
+        image.width,
+        image.height,
+        args.profile,
+      );
+      if (lines.length === 0) {
+        return `${header}\n没有可分析的线（全透明，或每条线的主簇覆盖都不足 50%）。`;
+      }
+      const { segments, jumps } = segmentAxisProfile(lines);
+      return `${header}\n沿 ${args.profile} 轴颜色剖面：\n${formatProfile(segments, jumps, args.profile)}`;
     }
 
     const data = image.bitmap.data;
@@ -332,11 +436,31 @@ export const COLORS_TOOL: LocalToolEntry<ColorsArgs> = {
       .slice(0, args.top ?? 5)
       .map((c) => ({ ...c.rgb, pct: (c.count / opaque) * 100 }));
 
-    let out = topColors
-      .map(
-        (c, i) => `${i + 1}. ${rgbToHex(c.r, c.g, c.b)}（${c.pct.toFixed(1)}%）`,
-      )
-      .join("\n");
+    let out =
+      header +
+      "\n" +
+      topColors
+        .map(
+          (c, i) => `${i + 1}. ${rgbToHex(c.r, c.g, c.b)}（${c.pct.toFixed(1)}%）`,
+        )
+        .join("\n");
+
+    // 近邻簇提示：多个主色彼此只差几个点，往往是细微色差/渐变的第一个信号
+    //（视觉模型对此系统性失明），也可能是量化跨桶 —— 提示交给调用方判断
+    const nearPairs: string[] = [];
+    for (let i = 0; i < topColors.length; i++) {
+      for (let j = i + 1; j < topColors.length; j++) {
+        const d = linearColorDiff(topColors[i], topColors[j]);
+        if (d > 0 && d <= NEAR_CLUSTER_DIFF) {
+          nearPairs.push(`第${i + 1}/${j + 1}号色 Δ=${Math.round(d)}`);
+        }
+      }
+    }
+    if (nearPairs.length > 0) {
+      out +=
+        `\n⚠ 相近簇：${nearPairs.join("；")} —— 可能存在细微色差或渐变（也可能是量化跨桶）。` +
+        `可用 region 分区对比，或 profile:"y"/"x" 查看颜色结构`;
+    }
 
     if (args.candidates?.length && topColors.length > 0) {
       const dom = topColors[0];

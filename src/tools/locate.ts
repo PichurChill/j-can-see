@@ -121,7 +121,9 @@ export const LOCATE_TOOL: VisionToolEntry<LocateArgs> = {
         `未找到目标「${args.target}」。可尝试：` +
         `① 长图/高图会被等比压缩（长边上限 ${config.J_SEE_MAX_EDGE}px），` +
         `小目标可能因此不可辨 —— 先用 crop 裁出大致区域，在局部图上重新 locate；` +
-        `② 改用 inspect 枚举全部元素后自行挑选。` +
+        `② 改用 inspect 枚举全部元素后自行挑选；` +
+        `③ 大块纯色背景区域不是模型认得的「元素」，定位背景区块请改用 colors` +
+        `（profile/region 做像素探测）或以 inspect 找到的邻近元素反推` +
         notice
       );
     }

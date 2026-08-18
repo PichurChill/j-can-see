@@ -104,3 +104,110 @@ export function createColorClusters(): ColorClusterAccumulator {
     },
   };
 }
+
+// ---------- 颜色剖面（colors 的 profile 模式） ----------
+
+/** 剖面每条线（行/列）的最大采样数：主色统计是抽样统计，不需要全量像素 */
+const PROFILE_MAX_SAMPLES_PER_LINE = 512;
+
+/**
+ * 相邻两线主色的最大通道差超过此值视为跳变。
+ * 刻意取 5：平滑渐变每行变化 <1、编码噪声 ≤2、真实接缝/断层 ≥6（实测平铺渐变
+ * 接缝 ΔR=11），5 恰好在噪声之上、语义断层之下。
+ */
+export const PROFILE_JUMP_THRESHOLD = 5;
+
+/** 主簇覆盖低于此比例的线视为杂线（文字/多元素混排），不参与分段 */
+const PROFILE_LINE_COVERAGE = 0.5;
+
+/** 一条线的扫描结果：index 为 y（axis="y"）或 x（axis="x"），rgb 为该线主色 */
+export interface ProfileLine {
+  readonly index: number;
+  readonly rgb: Rgb;
+}
+
+/**
+ * 沿 x 或 y 轴逐线取主色。每条线用与 colors 相同的量化聚类取最大簇 ——
+ * 线上的少数内容（文字/图标）不会污染主色；透明线与主簇不过半的杂线直接跳过。
+ */
+export function scanAxisProfile(
+  data: Uint8Array | Buffer,
+  width: number,
+  height: number,
+  axis: "x" | "y",
+): ProfileLine[] {
+  const along = axis === "y" ? height : width;
+  const across = axis === "y" ? width : height;
+  const step = Math.max(1, Math.ceil(across / PROFILE_MAX_SAMPLES_PER_LINE));
+  const lines: ProfileLine[] = [];
+  for (let i = 0; i < along; i++) {
+    const clusters = createColorClusters();
+    let opaque = 0;
+    for (let j = 0; j < across; j += step) {
+      const o = axis === "y" ? (i * width + j) * 4 : (j * width + i) * 4;
+      if (data[o + 3] === 0) continue;
+      opaque++;
+      clusters.add(data[o], data[o + 1], data[o + 2]);
+    }
+    if (opaque === 0) continue;
+    const top = clusters.result()[0];
+    if (top.count / opaque < PROFILE_LINE_COVERAGE) continue;
+    lines.push({ index: i, rgb: top.rgb });
+  }
+  return lines;
+}
+
+export interface ProfileSegment {
+  readonly from: number;
+  readonly to: number;
+  readonly start: Rgb;
+  readonly end: Rgb;
+}
+
+export interface ProfileJump {
+  /** 跳变后第一条线的 index（即跳变发生处） */
+  readonly at: number;
+  readonly from: Rgb;
+  readonly to: Rgb;
+  readonly diff: number;
+}
+
+/**
+ * 把逐线主色切成「均匀段 + 跳变点」。相邻有效线（含因杂线/透明产生的空洞）
+ * 主色差 ≤ 阈值即同段 —— 段内的平滑变化是渐变，超阈值的突变是接缝/断层；
+ * 空洞两侧颜色一致时跨空洞并段，不会把文字带误判成跳变。
+ */
+export function segmentAxisProfile(
+  lines: readonly ProfileLine[],
+  jumpThreshold = PROFILE_JUMP_THRESHOLD,
+): { segments: ProfileSegment[]; jumps: ProfileJump[] } {
+  const segments: ProfileSegment[] = [];
+  const jumps: ProfileJump[] = [];
+  let segStart: ProfileLine | null = null;
+  let prev: ProfileLine | null = null;
+  const close = (end: ProfileLine) => {
+    if (segStart) {
+      segments.push({
+        from: segStart.index,
+        to: end.index,
+        start: segStart.rgb,
+        end: end.rgb,
+      });
+    }
+  };
+  for (const line of lines) {
+    if (prev) {
+      const diff = linearColorDiff(prev.rgb, line.rgb);
+      if (diff > jumpThreshold) {
+        close(prev);
+        jumps.push({ at: line.index, from: prev.rgb, to: line.rgb, diff });
+        segStart = line;
+      }
+    } else {
+      segStart = line;
+    }
+    prev = line;
+  }
+  if (prev) close(prev);
+  return { segments, jumps };
+}

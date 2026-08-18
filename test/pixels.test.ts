@@ -8,6 +8,7 @@ import {
   IMAGE_DIFF_TOOL,
   COLORS_TOOL,
 } from "../src/tools/pixels.js";
+import { segmentAxisProfile } from "../src/tools/color.js";
 import { deriveDefaultOutput } from "../src/tools/output.js";
 import { runLocal, makePng, readerFrom } from "./helpers.js";
 
@@ -20,6 +21,16 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+/** 每行一种纯色（R 通道逐行给定，G=0xcc B=0xff），用于渐变/接缝剖面测试 */
+async function rowsPng(width: number, rowR: number[]): Promise<Buffer> {
+  const img = new Jimp({ width, height: rowR.length, color: 0xff0000ff });
+  rowR.forEach((r, y) => {
+    const c = (((r & 0xff) << 24) | (0xcc << 16) | (0xff << 8) | 0xff) >>> 0;
+    for (let x = 0; x < width; x++) img.setPixelColor(c, x, y);
+  });
+  return img.getBuffer("image/png");
+}
 
 describe("deriveDefaultOutput", () => {
   it("~/x.png 默认输出展开到家目录（与读取侧对称）", () => {
@@ -305,5 +316,137 @@ describe("COLORS_TOOL", () => {
     );
     expect(text).toContain("#ff0000");
     expect(text).not.toContain("#00ff00");
+    expect(text).toContain("原图 40×20，region 裁剪后 20×20"); // 尺寸回显，省掉 sips 一类取尺寸的调用
+  });
+
+  it("输出回显原图尺寸（无 region）", async () => {
+    const png = await makePng(50, 50, 0xff0000ff);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("原图 50×50");
+  });
+
+  it("相近簇（Δ≤16）触发提示：可能存在细微色差或渐变", async () => {
+    // 左右两半只差 ΔR=6 —— 视觉模型看不出的细微色差
+    const img = new Jimp({ width: 40, height: 20, color: 0x6cceffff });
+    img.composite(new Jimp({ width: 20, height: 20, color: 0x66ccffff }), 20, 0);
+    const png = await img.getBuffer("image/png");
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("相近簇");
+    expect(text).toContain("Δ=6");
+    expect(text).toContain("profile");
+  });
+
+  it("纯色图不触发相近簇提示", async () => {
+    const png = await makePng(50, 50, 0xff0000ff);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).not.toContain("相近簇");
+  });
+});
+
+describe("COLORS_TOOL profile 模式", () => {
+  it("平铺渐变接缝：两段渐变 + 中间一处跳变（含位置与两侧色值）", async () => {
+    // 复现真实案例：150px 渐变被上下平铺两份 —— 上半 R 100→119，下半又从 100 开始
+    const rows = [
+      ...Array.from({ length: 20 }, (_, i) => 100 + i),
+      ...Array.from({ length: 20 }, (_, i) => 100 + i),
+    ];
+    const png = await rowsPng(10, rows);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", profile: "y" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("共 2 段、1 处跳变");
+    expect(text).toContain("y=0~19");
+    expect(text).toContain("y=20 跳变：#77ccff → #64ccff（最大通道差 19）");
+    expect(text).toContain("渐变 ΔR=19");
+  });
+
+  it("平滑渐变：单段、无跳变", async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => 100 + i); // 每行 +1，远低于跳变阈值
+    const png = await rowsPng(10, rows);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", profile: "y" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("共 1 段、0 处跳变");
+    expect(text).toContain("渐变 ΔR=39");
+  });
+
+  it('profile:"x" 按列扫描，左右两个纯色块报一处跳变', async () => {
+    const img = new Jimp({ width: 40, height: 10, color: 0xff0000ff });
+    img.composite(new Jimp({ width: 20, height: 10, color: 0x0000ffff }), 20, 0);
+    const png = await img.getBuffer("image/png");
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", profile: "x" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("x=0~19：#ff0000（纯色）");
+    expect(text).toContain("x=20 跳变");
+  });
+
+  it("分段过多（纹理噪声）时收敛为 top 跳变 + 缩小 region 建议", async () => {
+    // 红蓝逐行交替：每行都是跳变
+    const rows = Array.from({ length: 30 }, (_, i) => (i % 2 ? 255 : 100));
+    const png = await rowsPng(10, rows);
+    const text = await runLocal(
+      COLORS_TOOL,
+      { source: "x.png", profile: "y" },
+      { reader: readerFrom({ "x.png": png }) },
+    );
+    expect(text).toContain("分段过多");
+    expect(text).toContain("region");
+  });
+});
+
+describe("segmentAxisProfile（纯函数）", () => {
+  const blue = (r: number) => ({ r, g: 204, b: 255 });
+
+  it("空洞两侧颜色一致时跨空洞并段（文字带不产生跳变）", () => {
+    const lines = [
+      { index: 0, rgb: blue(100) },
+      { index: 1, rgb: blue(100) },
+      // 2~4 为杂线（主簇覆盖不足）被跳过
+      { index: 5, rgb: blue(101) },
+      { index: 6, rgb: blue(101) },
+    ];
+    const { segments, jumps } = segmentAxisProfile(lines);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toMatchObject({ from: 0, to: 6 });
+    expect(jumps).toHaveLength(0);
+  });
+
+  it("相邻线色差超阈值切成两段并记录跳变", () => {
+    const lines = [
+      { index: 10, rgb: blue(100) },
+      { index: 11, rgb: blue(119) },
+    ];
+    const { segments, jumps } = segmentAxisProfile(lines);
+    expect(segments.map((s) => [s.from, s.to])).toEqual([
+      [10, 10],
+      [11, 11],
+    ]);
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0]).toMatchObject({ at: 11, diff: 19 });
+  });
+
+  it("空输入返回空结果", () => {
+    const { segments, jumps } = segmentAxisProfile([]);
+    expect(segments).toEqual([]);
+    expect(jumps).toEqual([]);
   });
 });
