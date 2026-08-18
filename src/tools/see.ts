@@ -29,7 +29,8 @@ import {
 } from "./types.js";
 
 export const DEFAULT_PROMPT =
-  "详细描述这张图片的内容，包括其中的文字、UI 元素、颜色和布局。";
+  "详细描述这张图片的内容，包括其中的文字、UI 元素、颜色和布局。" +
+  "对无法确认的细节（颜色深浅/纹理/数量等），明确说「无法确认」，不要推测或编造。";
 
 export const seeImageSchema = z
   .object({
@@ -66,7 +67,9 @@ export const SEE_IMAGE_TOOL: VisionToolEntry<SeeImageArgs> = {
         prompt: {
           type: "string",
           description:
-            "对图片的提问或指令，省略则默认详细描述图片内容与其中文字。多图时用于描述对比/问答意图。",
+            "对图片的提问或指令，省略则默认详细描述图片内容与其中文字。多图时用于描述对比/问答意图。" +
+            "描述类提问建议开放式（避免「有没有 X」的引导式问法，会诱导模型确认）；" +
+            "模型输出的颜色/尺寸/数量只是参考，像素级事实以本地工具（colors/image_diff）为准。",
         },
         region: regionProperty,
         max_edge: {
